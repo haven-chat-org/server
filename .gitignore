@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target/
+
+# Local attachment storage & TLS certs
+/data/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker overrides
+docker-compose.override.yml
+
+# Test storage (integration tests)
+/tmp/haven-test-storage/
+
+# Claude
+.claude/

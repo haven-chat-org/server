@@ -1,0 +1,23 @@
+discordsucks.org {
+    redir https://www.discordsucks.org{uri} permanent
+}
+
+{$HAVEN_DOMAIN} {
+    # WebSocket — long-lived connections need special handling
+    @ws path /api/v1/ws
+    reverse_proxy @ws haven:8080
+
+    # LiveKit signaling (WebSocket) — strip /livekit prefix before forwarding
+    handle_path /livekit/* {
+        reverse_proxy livekit:7880
+    }
+
+    # All other traffic → Haven backend (serves API + embedded frontend)
+    reverse_proxy haven:8080 {
+        health_uri /health
+        health_interval 5s
+    }
+
+    header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    encode gzip
+}

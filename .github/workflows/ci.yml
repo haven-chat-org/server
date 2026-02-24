@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: "true"
+
+jobs:
+  check-server:
+    name: Server Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Download pre-built web frontend for embed-ui feature
+      - name: Download web frontend
+        run: |
+          mkdir -p packages/web/dist
+          curl -fSL https://github.com/haven-chat-org/web/releases/latest/download/web-dist.tar.gz \
+            -o /tmp/web-dist.tar.gz
+          tar -xzf /tmp/web-dist.tar.gz -C packages/web/dist
+
+      - run: cargo check --features postgres,embed-ui
+      - run: cargo clippy --workspace -- -D warnings
