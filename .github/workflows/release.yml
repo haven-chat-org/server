@@ -3,6 +3,8 @@ name: Release & Deploy
 on:
   push:
     branches: [main]
+  repository_dispatch:
+    types: [web-release]
 
 permissions:
   contents: write
