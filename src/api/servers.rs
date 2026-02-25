@@ -84,6 +84,7 @@ pub async fn create_server(
         my_permissions: Some(i64::MAX.to_string()),
         system_channel_id: Some(channel.id),
         icon_url: None,
+        is_system: None,
     }))
 }
 
@@ -104,6 +105,7 @@ pub async fn get_server(
 
     let (_, perms) = queries::get_member_permissions(state.db.read(), server_id, user_id).await?;
 
+    let system = if server.is_system { Some(true) } else { None };
     Ok(Json(ServerResponse {
         id: server.id,
         encrypted_meta: base64::Engine::encode(
@@ -115,6 +117,7 @@ pub async fn get_server(
         my_permissions: Some(perms.to_string()),
         system_channel_id: server.system_channel_id,
         icon_url: server.icon_url.clone(),
+        is_system: system,
     }))
 }
 
@@ -129,6 +132,7 @@ pub async fn list_servers(
     let mut responses = Vec::with_capacity(servers.len());
     for s in servers {
         let (_, perms) = queries::get_member_permissions(state.db.read(), s.id, user_id).await?;
+        let system = if s.is_system { Some(true) } else { None };
         responses.push(ServerResponse {
             id: s.id,
             encrypted_meta: base64::Engine::encode(
@@ -140,6 +144,7 @@ pub async fn list_servers(
             my_permissions: Some(perms.to_string()),
             system_channel_id: s.system_channel_id,
             icon_url: s.icon_url.clone(),
+            is_system: system,
         });
     }
 
@@ -236,6 +241,13 @@ pub async fn update_server(
 ) -> AppResult<Json<serde_json::Value>> {
     if !queries::is_server_member(state.db.read(), server_id, user_id).await? {
         return Err(AppError::Forbidden("Not a member of this server".into()));
+    }
+
+    // System server cannot be modified
+    if let Some(server) = queries::find_server_by_id(state.db.read(), server_id).await? {
+        if server.is_system {
+            return Err(AppError::Forbidden("The system server cannot be modified".into()));
+        }
     }
 
     // Require MANAGE_SERVER permission
@@ -408,6 +420,10 @@ pub async fn delete_server(
     let server = queries::find_server_by_id(state.db.read(), server_id)
         .await?
         .ok_or(AppError::NotFound("Server not found".into()))?;
+
+    if server.is_system {
+        return Err(AppError::Forbidden("The system server cannot be deleted".into()));
+    }
 
     if server.owner_id != user_id {
         return Err(AppError::Forbidden(

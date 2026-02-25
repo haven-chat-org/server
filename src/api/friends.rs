@@ -74,6 +74,7 @@ pub async fn send_friend_request(
                 status: "accepted".to_string(),
                 is_incoming: false,
                 created_at: accepted.created_at,
+                is_system: if requester.is_system { Some(true) } else { None },
             }));
         }
         return Err(AppError::Validation("Friend request already pending".into()));
@@ -102,6 +103,7 @@ pub async fn send_friend_request(
         status: "pending".to_string(),
         is_incoming: false,
         created_at: friendship.created_at,
+        is_system: if target.is_system { Some(true) } else { None },
     }))
 }
 
@@ -149,6 +151,7 @@ pub async fn accept_friend_request(
         status: "accepted".to_string(),
         is_incoming: true,
         created_at: accepted.created_at,
+        is_system: if requester.is_system { Some(true) } else { None },
     }))
 }
 

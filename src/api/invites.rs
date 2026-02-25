@@ -173,6 +173,7 @@ pub async fn join_by_invite(
 
     let (_, perms) = queries::get_member_permissions(state.db.read(), server.id, user_id).await?;
 
+    let system = if server.is_system { Some(true) } else { None };
     Ok(Json(ServerResponse {
         id: server.id,
         encrypted_meta: base64::Engine::encode(
@@ -184,6 +185,7 @@ pub async fn join_by_invite(
         my_permissions: Some(perms.to_string()),
         system_channel_id: server.system_channel_id,
         icon_url: server.icon_url.clone(),
+        is_system: system,
     }))
 }
 

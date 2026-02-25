@@ -95,6 +95,7 @@ pub async fn get_profile(
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, v)
     });
 
+    let system = if user.is_system { Some(true) } else { None };
     Ok(Json(UserProfileResponse {
         id: user.id,
         username: user.username,
@@ -114,6 +115,7 @@ pub async fn get_profile(
         mutual_server_count,
         roles,
         encrypted_profile,
+        is_system: system,
     }))
 }
 
