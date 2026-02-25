@@ -301,6 +301,84 @@ pub async fn register(
         queries::insert_prekeys(state.db.write(), user.id, &prekeys?).await?;
     }
 
+    // Create a personal Haven server and befriend the Haven system user
+    if let Ok(Some(system_user)) = queries::find_system_user(state.db.read()).await {
+        // Auto-friend the system user
+        let _ = queries::create_accepted_friendship(
+            state.db.write(), system_user.id, user.id,
+        ).await;
+
+        // Create personal Haven server owned by the new user
+        let server_meta = r#"{"name":"Haven"}"#;
+        if let Ok(server) = queries::create_server(
+            state.db.write(), user.id, server_meta.as_bytes(),
+        ).await {
+            // Add new user as server member (owner)
+            let _ = queries::add_server_member(
+                state.db.write(), server.id, user.id, b"owner",
+            ).await;
+            // Add Haven system user as server member
+            let _ = queries::add_server_member(
+                state.db.write(), server.id, system_user.id, b"member",
+            ).await;
+
+            // Create #welcome channel (unencrypted, position 0)
+            if let Ok(welcome_ch) = queries::create_channel(
+                state.db.write(), Some(server.id),
+                r#"{"name":"welcome"}"#.as_bytes(), "text", 0, None, false, false,
+            ).await {
+                let _ = queries::add_channel_member(state.db.write(), welcome_ch.id, user.id).await;
+                let _ = queries::add_channel_member(state.db.write(), welcome_ch.id, system_user.id).await;
+                // Welcome message from Haven (wire format: 0x00 + JSON payload)
+                let welcome_body = format!(
+                    "\x00{{\"text\":\"Welcome to Haven! This is your home for private, encrypted communication. Explore the channels, add friends, and make yourself at home.\",\"sender_id\":\"{}\"}}",
+                    system_user.id,
+                );
+                let _ = queries::insert_message(
+                    state.db.write(), welcome_ch.id, &[0u8],
+                    welcome_body.as_bytes(),
+                    None, false, system_user.id, None,
+                ).await;
+                // Set as system channel
+                let _ = queries::set_server_system_channel(
+                    state.db.write(), server.id, welcome_ch.id,
+                ).await;
+            }
+
+            // Create #general channel (unencrypted, position 1)
+            if let Ok(general_ch) = queries::create_channel(
+                state.db.write(), Some(server.id),
+                r#"{"name":"general"}"#.as_bytes(), "text", 1, None, false, false,
+            ).await {
+                let _ = queries::add_channel_member(state.db.write(), general_ch.id, user.id).await;
+                let _ = queries::add_channel_member(state.db.write(), general_ch.id, system_user.id).await;
+            }
+        }
+
+        // Create a DM channel from Haven to the new user
+        let display = user.display_name.as_deref().unwrap_or(&user.username);
+        let dm_meta = format!(
+            r#"{{"type":"dm","participants":["{}","{}"],"names":{{"{}":"Haven","{}":"{}"}}}}"#,
+            system_user.id, user.id, system_user.id, user.id, display,
+        );
+        if let Ok(dm_channel) = queries::create_channel(
+            state.db.write(), None, dm_meta.as_bytes(), "dm", 0, None, false, false,
+        ).await {
+            let _ = queries::add_channel_member(state.db.write(), dm_channel.id, system_user.id).await;
+            let _ = queries::add_channel_member(state.db.write(), dm_channel.id, user.id).await;
+            // DM message (wire format: 0x00 + JSON payload)
+            let dm_body = format!(
+                "\x00{{\"text\":\"Hey! Welcome to Haven. If you ever need help, check out the #welcome channel in your Haven server. Happy chatting!\",\"sender_id\":\"{}\"}}",
+                system_user.id,
+            );
+            let _ = queries::insert_message(
+                state.db.write(), dm_channel.id, &[0u8],
+                dm_body.as_bytes(),
+                None, false, system_user.id, None,
+            ).await;
+        }
+    }
+
     // Generate tokens with a new token family
     let family_id = Uuid::new_v4();
     let access_token = auth::generate_access_token(user.id, &state.config)?;
@@ -332,6 +410,11 @@ pub async fn login(
     let user = queries::find_user_by_username(state.db.read(), &req.username)
         .await?
         .ok_or(AppError::AuthError("Invalid username or password".into()))?;
+
+    // System users cannot log in
+    if user.is_system {
+        return Err(AppError::AuthError("Invalid username or password".into()));
+    }
 
     // Verify password
     if !auth::verify_password(&req.password, &user.password_hash)? {

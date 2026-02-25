@@ -45,6 +45,7 @@ pub struct User {
     pub dm_privacy: String, // "everyone", "friends_only", "server_members"
     pub encrypted_profile: Option<Vec<u8>>,
     pub is_instance_admin: bool,
+    pub is_system: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,12 +63,15 @@ pub struct UserPublic {
     pub encrypted_profile: Option<String>, // base64
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_instance_admin: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_system: Option<bool>,
     pub totp_enabled: bool,
 }
 
 impl From<User> for UserPublic {
     fn from(u: User) -> Self {
         let admin = if u.is_instance_admin { Some(true) } else { None };
+        let system = if u.is_system { Some(true) } else { None };
         let totp = u.totp_secret.is_some();
         Self {
             id: u.id,
@@ -83,6 +87,7 @@ impl From<User> for UserPublic {
                 base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &v)
             }),
             is_instance_admin: admin,
+            is_system: system,
             totp_enabled: totp,
         }
     }
@@ -219,6 +224,7 @@ pub struct Server {
     pub created_at: DateTime<Utc>,
     pub system_channel_id: Option<Uuid>,
     pub icon_url: Option<String>,
+    pub is_system: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,6 +246,8 @@ pub struct ServerResponse {
     pub system_channel_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_system: Option<bool>,
 }
 
 // ─── Channels ──────────────────────────────────────────
@@ -953,6 +961,8 @@ pub struct ServerMemberResponse {
     pub role_ids: Vec<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timed_out_until: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_system: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1017,6 +1027,8 @@ pub struct UserProfileResponse {
     pub roles: Option<Vec<RoleResponse>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_profile: Option<String>, // base64
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_system: Option<bool>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1202,6 +1214,8 @@ pub struct FriendResponse {
     pub status: String,      // "pending", "accepted"
     pub is_incoming: bool,   // true if the other user sent the request
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_system: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

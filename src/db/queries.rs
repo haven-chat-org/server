@@ -1412,10 +1412,10 @@ pub async fn get_server_members(
 ) -> AppResult<Vec<ServerMemberResponse>> {
     // Step 1: Get members (paginated)
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(Uuid, String, Option<String>, Option<String>, DateTime<Utc>, Option<String>, Option<DateTime<Utc>>)> =
+    let rows: Vec<(Uuid, String, Option<String>, Option<String>, DateTime<Utc>, Option<String>, Option<DateTime<Utc>>, bool)> =
         sqlx::query_as(
             r#"
-            SELECT sm.user_id, u.username, u.display_name, u.avatar_url, sm.joined_at, sm.nickname, sm.timed_out_until
+            SELECT sm.user_id, u.username, u.display_name, u.avatar_url, sm.joined_at, sm.nickname, sm.timed_out_until, u.is_system
             FROM server_members sm
             INNER JOIN users u ON u.id = sm.user_id
             WHERE sm.server_id = $1
@@ -1447,7 +1447,7 @@ pub async fn get_server_members(
     Ok(rows
         .into_iter()
         .map(
-            |(user_id, username, display_name, avatar_url, joined_at, nickname, timed_out_until)| {
+            |(user_id, username, display_name, avatar_url, joined_at, nickname, timed_out_until, is_sys)| {
                 // Only include timed_out_until if it's still in the future
                 let active_timeout = timed_out_until.filter(|t| *t > Utc::now());
                 ServerMemberResponse {
@@ -1459,6 +1459,7 @@ pub async fn get_server_members(
                     nickname,
                     role_ids: role_map.remove(&user_id).unwrap_or_default(),
                     timed_out_until: active_timeout,
+                    is_system: if is_sys { Some(true) } else { None },
                 }
             },
         )
@@ -2232,13 +2233,15 @@ pub async fn get_friends_list(pool: &Pool, user_id: Uuid, limit: i64, offset: i6
         r#"
         SELECT * FROM (
             SELECT f.id, f.addressee_id AS user_id, u.username, u.display_name, u.avatar_url,
-                   f.status, FALSE AS is_incoming, f.created_at
+                   f.status, FALSE AS is_incoming, f.created_at,
+                   CASE WHEN u.is_system THEN TRUE ELSE NULL END AS is_system
             FROM friendships f
             INNER JOIN users u ON u.id = f.addressee_id
             WHERE f.requester_id = $1
             UNION ALL
             SELECT f.id, f.requester_id AS user_id, u.username, u.display_name, u.avatar_url,
-                   f.status, TRUE AS is_incoming, f.created_at
+                   f.status, TRUE AS is_incoming, f.created_at,
+                   CASE WHEN u.is_system THEN TRUE ELSE NULL END AS is_system
             FROM friendships f
             INNER JOIN users u ON u.id = f.requester_id
             WHERE f.addressee_id = $1
@@ -3209,4 +3212,52 @@ pub async fn delete_registration_invite(pool: &Pool, invite_id: Uuid) -> AppResu
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+// ─── System user / server helpers ─────────────────────
+
+/// Find the system server (is_system = TRUE).
+pub async fn find_system_server(pool: &Pool) -> AppResult<Option<Server>> {
+    let server = sqlx::query_as::<_, Server>(
+        "SELECT * FROM servers WHERE is_system = TRUE LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(server)
+}
+
+/// Find the system user (is_system = TRUE).
+pub async fn find_system_user(pool: &Pool) -> AppResult<Option<User>> {
+    let user = sqlx::query_as::<_, User>(
+        "SELECT * FROM users WHERE is_system = TRUE LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(user)
+}
+
+/// Set the system_channel_id on a server (used during per-user server creation).
+pub async fn set_server_system_channel(pool: &Pool, server_id: Uuid, channel_id: Uuid) -> AppResult<()> {
+    sqlx::query("UPDATE servers SET system_channel_id = $1 WHERE id = $2")
+        .bind(channel_id)
+        .bind(server_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Create an auto-accepted friendship (bypasses the request/accept flow).
+pub async fn create_accepted_friendship(pool: &Pool, user_a: Uuid, user_b: Uuid) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO friendships (id, requester_id, addressee_id, status, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, 'accepted', NOW(), NOW())
+        ON CONFLICT (requester_id, addressee_id) DO NOTHING
+        "#,
+    )
+    .bind(user_a)
+    .bind(user_b)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
