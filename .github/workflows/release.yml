@@ -144,6 +144,18 @@ jobs:
     needs: [docker]
     environment: production
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync config files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "docker-compose.prod.yml,Caddyfile,livekit.yaml,deploy.sh"
+          target: /opt/haven
+          overwrite: true
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
