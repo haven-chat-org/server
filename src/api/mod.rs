@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth_routes;
 pub mod bans;
+pub mod beta;
 pub mod categories;
 pub mod channels;
 pub mod emojis;

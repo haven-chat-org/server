@@ -949,6 +949,19 @@ pub struct AdminCreateInvitesRequest {
     pub count: Option<u32>,
 }
 
+// ─── Beta Code Request ──────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct BetaCodeRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BetaCodeResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ServerMemberResponse {
     pub user_id: Uuid,

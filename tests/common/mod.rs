@@ -86,6 +86,7 @@ impl TestApp {
             cdn_base_url: String::new(),
             cdn_presign_expiry_secs: 3600,
             livekit_url: String::new(),
+            livekit_client_url: String::new(),
             livekit_api_key: String::new(),
             livekit_api_secret: String::new(),
             livekit_bundled: false,
@@ -101,6 +102,18 @@ impl TestApp {
             registration_invite_only: false,
             registration_invites_per_user: 3,
             giphy_api_key: String::new(),
+
+            turnstile_site_key: String::new(),
+            turnstile_secret_key: String::new(),
+
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+
+            beta_code_limit: 50,
+            beta_code_expiry_days: 7,
         };
 
         std::fs::create_dir_all(&config.storage_dir).ok();

@@ -480,6 +480,16 @@ pub fn build_router(state: AppState) -> Router {
             delete(api::registration_invites::admin_delete_invite),
         );
 
+    // Beta code request (public, strict rate limit: 3 req/min per IP)
+    let beta_limiter = RateLimiter::new(3, 60);
+    let beta_limiter_clone = beta_limiter.clone();
+    let beta_routes = Router::new()
+        .route("/request-code", post(api::beta::request_beta_code))
+        .layer(axum_mw::from_fn(move |req, next| {
+            let limiter = beta_limiter_clone.clone();
+            rate_limit_middleware(limiter, req, next)
+        }));
+
     // GIF proxy routes
     let gif_routes = Router::new()
         .route("/search", get(api::gifs::search_gifs))
@@ -512,6 +522,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/reports", report_routes)
         .nest("/voice", voice_routes)
         .nest("/gifs", gif_routes)
+        .nest("/beta", beta_routes)
         .nest("/registration-invites", registration_invite_routes)
         .nest("/exports", export_routes);
 

@@ -118,6 +118,24 @@ pub struct ConfigFile {
     pub turnstile_site_key: String,
     #[serde(default)]
     pub turnstile_secret_key: String,
+
+    // SMTP (beta code email delivery) — disabled when smtp_host is empty
+    #[serde(default)]
+    pub smtp_host: String,
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
+    #[serde(default)]
+    pub smtp_username: String,
+    #[serde(default)]
+    pub smtp_password: String,
+    #[serde(default)]
+    pub smtp_from: String,
+
+    // Beta code system
+    #[serde(default = "default_beta_code_limit")]
+    pub beta_code_limit: u32,
+    #[serde(default = "default_beta_code_expiry_days")]
+    pub beta_code_expiry_days: i64,
 }
 
 // ─── TLS Config ───────────────────────────────────────
@@ -176,6 +194,9 @@ fn default_audit_log_retention_days() -> u32 { 90 }
 fn default_resolved_report_retention_days() -> u32 { 180 }
 fn default_expired_invite_cleanup() -> bool { true }
 fn default_registration_invites_per_user() -> u32 { 3 }
+fn default_smtp_port() -> u16 { 587 }
+fn default_beta_code_limit() -> u32 { 50 }
+fn default_beta_code_expiry_days() -> i64 { 7 }
 
 // ─── Application Config ───────────────────────────────
 
@@ -261,9 +282,25 @@ pub struct AppConfig {
     // Cloudflare Turnstile (CAPTCHA) — disabled when empty
     pub turnstile_site_key: String,
     pub turnstile_secret_key: String,
+
+    // SMTP (beta code email delivery) — disabled when smtp_host is empty
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_username: String,
+    pub smtp_password: String,
+    pub smtp_from: String,
+
+    // Beta code system
+    pub beta_code_limit: u32,
+    pub beta_code_expiry_days: i64,
 }
 
 impl AppConfig {
+    /// Returns true if SMTP is configured for beta code delivery.
+    pub fn smtp_enabled(&self) -> bool {
+        !self.smtp_host.is_empty() && !self.smtp_username.is_empty()
+    }
+
     /// Returns true if Cloudflare Turnstile CAPTCHA is configured.
     pub fn turnstile_enabled(&self) -> bool {
         !self.turnstile_site_key.is_empty() && !self.turnstile_secret_key.is_empty()
@@ -341,6 +378,15 @@ impl AppConfig {
 
             turnstile_site_key: String::new(),
             turnstile_secret_key: String::new(),
+
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+
+            beta_code_limit: 50,
+            beta_code_expiry_days: 7,
         }
     }
 
@@ -479,6 +525,24 @@ impl AppConfig {
 
             turnstile_site_key: env::var("TURNSTILE_SITE_KEY").unwrap_or_default(),
             turnstile_secret_key: env::var("TURNSTILE_SECRET_KEY").unwrap_or_default(),
+
+            smtp_host: env::var("SMTP_HOST").unwrap_or_default(),
+            smtp_port: env::var("SMTP_PORT")
+                .unwrap_or_else(|_| "587".into())
+                .parse()
+                .unwrap_or(587),
+            smtp_username: env::var("SMTP_USERNAME").unwrap_or_default(),
+            smtp_password: env::var("SMTP_PASSWORD").unwrap_or_default(),
+            smtp_from: env::var("SMTP_FROM").unwrap_or_default(),
+
+            beta_code_limit: env::var("BETA_CODE_LIMIT")
+                .unwrap_or_else(|_| "50".into())
+                .parse()
+                .unwrap_or(50),
+            beta_code_expiry_days: env::var("BETA_CODE_EXPIRY_DAYS")
+                .unwrap_or_else(|_| "7".into())
+                .parse()
+                .unwrap_or(7),
         }
     }
 
@@ -554,6 +618,15 @@ impl AppConfig {
 
             turnstile_site_key: file.turnstile_site_key,
             turnstile_secret_key: file.turnstile_secret_key,
+
+            smtp_host: file.smtp_host,
+            smtp_port: file.smtp_port,
+            smtp_username: file.smtp_username,
+            smtp_password: file.smtp_password,
+            smtp_from: file.smtp_from,
+
+            beta_code_limit: file.beta_code_limit,
+            beta_code_expiry_days: file.beta_code_expiry_days,
         }
     }
 
@@ -621,6 +694,15 @@ impl AppConfig {
 
             turnstile_site_key: String::new(),
             turnstile_secret_key: String::new(),
+
+            smtp_host: String::new(),
+            smtp_port: default_smtp_port(),
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+
+            beta_code_limit: default_beta_code_limit(),
+            beta_code_expiry_days: default_beta_code_expiry_days(),
         };
 
         // Write the TOML file
@@ -685,6 +767,15 @@ impl AppConfig {
 
             turnstile_site_key: file.turnstile_site_key,
             turnstile_secret_key: file.turnstile_secret_key,
+
+            smtp_host: file.smtp_host,
+            smtp_port: file.smtp_port,
+            smtp_username: file.smtp_username,
+            smtp_password: file.smtp_password,
+            smtp_from: file.smtp_from,
+
+            beta_code_limit: file.beta_code_limit,
+            beta_code_expiry_days: file.beta_code_expiry_days,
         }
     }
 }
