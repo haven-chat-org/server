@@ -298,7 +298,7 @@ pub struct AppConfig {
 impl AppConfig {
     /// Returns true if SMTP is configured for beta code delivery.
     pub fn smtp_enabled(&self) -> bool {
-        !self.smtp_host.is_empty() && !self.smtp_username.is_empty()
+        !self.smtp_host.is_empty() && !self.smtp_username.is_empty() && !self.smtp_from.is_empty()
     }
 
     /// Returns true if Cloudflare Turnstile CAPTCHA is configured.

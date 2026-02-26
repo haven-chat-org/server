@@ -73,7 +73,7 @@ pub async fn request_beta_code(
         )
         .await
         {
-            tracing::error!("Failed to send beta code: {:?}", e);
+            tracing::error!("Failed to send beta code email via {}: {:?}", smtp_host, e);
             // Note: the invite code was already created in the DB.
             // We intentionally do NOT delete it on send failure — the code
             // is still valid and the user could retry or contact support.
@@ -99,9 +99,19 @@ async fn send_beta_email(
     code: &str,
     expiry_days: i64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let from_trimmed = smtp_from.trim().trim_matches('"');
+    let to_trimmed = to_email.trim();
+
+    let from_mailbox = from_trimmed.parse().map_err(|e| {
+        format!("Failed to parse From address '{}': {}", from_trimmed, e)
+    })?;
+    let to_mailbox = to_trimmed.parse().map_err(|e| {
+        format!("Failed to parse To address: {}", e)
+    })?;
+
     let email = Message::builder()
-        .from(smtp_from.parse()?)
-        .to(to_email.parse()?)
+        .from(from_mailbox)
+        .to(to_mailbox)
         .subject("Your Haven Beta Code")
         .header(ContentType::TEXT_HTML)
         .body(format!(
