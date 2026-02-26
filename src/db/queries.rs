@@ -3204,6 +3204,32 @@ pub async fn list_all_registration_invites(
     Ok(invites)
 }
 
+/// Count beta codes (registration invites with created_by = NULL).
+pub async fn count_beta_codes(pool: &Pool) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM registration_invites WHERE created_by IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Create a beta invite (created_by = NULL, with expiry).
+pub async fn create_beta_invite(pool: &Pool, expiry_days: i64) -> AppResult<RegistrationInvite> {
+    let code = crate::crypto::generate_invite_code();
+    let invite = sqlx::query_as::<_, RegistrationInvite>(
+        r#"INSERT INTO registration_invites (id, code, created_by, expires_at, created_at)
+           VALUES ($1, $2, NULL, NOW() + make_interval(days => $3), NOW())
+           RETURNING *"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(&code)
+    .bind(expiry_days as i32)
+    .fetch_one(pool)
+    .await?;
+    Ok(invite)
+}
+
 pub async fn delete_registration_invite(pool: &Pool, invite_id: Uuid) -> AppResult<bool> {
     let result = sqlx::query(
         "DELETE FROM registration_invites WHERE id = $1 AND used_by IS NULL",
