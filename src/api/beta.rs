@@ -61,7 +61,7 @@ pub async fn request_beta_code(
     let expiry_days = state.config.beta_code_expiry_days;
 
     tokio::spawn(async move {
-        if let Err(e) = send_beta_email(
+        match send_beta_email(
             &smtp_host,
             smtp_port,
             &smtp_username,
@@ -73,10 +73,15 @@ pub async fn request_beta_code(
         )
         .await
         {
-            tracing::error!("Failed to send beta code email via {}: {:?}", smtp_host, e);
-            // Note: the invite code was already created in the DB.
-            // We intentionally do NOT delete it on send failure — the code
-            // is still valid and the user could retry or contact support.
+            Ok(()) => {
+                tracing::info!("Beta code email sent successfully via {}", smtp_host);
+            }
+            Err(e) => {
+                tracing::error!("Failed to send beta code email via {}: {:?}", smtp_host, e);
+                // Note: the invite code was already created in the DB.
+                // We intentionally do NOT delete it on send failure — the code
+                // is still valid and the user could retry or contact support.
+            }
         }
         // After this block, `email` is dropped and gone forever.
     });
