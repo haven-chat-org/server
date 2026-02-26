@@ -67,6 +67,7 @@ pub fn build_router(state: AppState) -> Router {
     // ─── CORS ──────────────────────────────────────────
     let cors = if state.config.cors_origins == "*" {
         // Dev/test mode: allow all origins
+        tracing::warn!("CORS is set to wildcard (*) — this allows any origin. Use specific origins in production.");
         CorsLayer::new()
             .allow_origin(AllowOrigin::any())
             .allow_methods([
@@ -101,11 +102,13 @@ pub fn build_router(state: AppState) -> Router {
 
     // ─── Rate Limiting ─────────────────────────────────
     // Global: per-IP, based on config max_requests_per_minute
-    let global_limiter = RateLimiter::new(state.config.max_requests_per_minute, 60);
+    let mut global_limiter = RateLimiter::new(state.config.max_requests_per_minute, 60);
+    global_limiter.trust_proxy = state.config.trust_proxy;
     middleware::spawn_rate_limit_cleanup(global_limiter.clone());
 
     // Stricter limit for auth endpoints (10 req/min per IP to resist brute-force)
-    let auth_limiter = RateLimiter::new(10, 60);
+    let mut auth_limiter = RateLimiter::new(10, 60);
+    auth_limiter.trust_proxy = state.config.trust_proxy;
 
     // Auth routes (no authentication required) — stricter rate limit
     let auth_limiter_clone = auth_limiter.clone();
@@ -481,7 +484,8 @@ pub fn build_router(state: AppState) -> Router {
         );
 
     // Beta code request (public, strict rate limit: 3 req/min per IP)
-    let beta_limiter = RateLimiter::new(3, 60);
+    let mut beta_limiter = RateLimiter::new(3, 60);
+    beta_limiter.trust_proxy = state.config.trust_proxy;
     let beta_limiter_clone = beta_limiter.clone();
     let beta_routes = Router::new()
         .route("/request-code", post(api::beta::request_beta_code))
