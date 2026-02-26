@@ -33,6 +33,8 @@ pub struct RateLimiter {
     window_secs: u64,
     /// Random key for HMAC — generated once at creation, never persisted.
     ip_hash_key: Arc<[u8; 32]>,
+    /// Whether to trust X-Forwarded-For headers for IP extraction.
+    pub trust_proxy: bool,
 }
 
 impl RateLimiter {
@@ -45,6 +47,7 @@ impl RateLimiter {
             max_requests,
             window_secs,
             ip_hash_key: Arc::new(key),
+            trust_proxy: false,
         }
     }
 
@@ -114,18 +117,24 @@ impl UserRateLimiter {
     }
 }
 
-/// Extract the client IP from the request (ConnectInfo or X-Forwarded-For).
-pub fn extract_ip(req: &Request) -> IpAddr {
+/// Extract the client IP from the request.
+/// When `trust_proxy` is true, checks X-Forwarded-For header first.
+/// When false, only uses ConnectInfo (direct socket address).
+pub fn extract_ip(req: &Request, trust_proxy: bool) -> IpAddr {
+    if trust_proxy {
+        if let Some(ip) = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse().ok())
+        {
+            return ip;
+        }
+    }
     req.extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip())
-        .or_else(|| {
-            req.headers()
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.split(',').next())
-                .and_then(|s| s.trim().parse().ok())
-        })
         .unwrap_or(IpAddr::from([127, 0, 0, 1]))
 }
 
@@ -135,7 +144,7 @@ pub async fn rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let ip = extract_ip(&req);
+    let ip = extract_ip(&req, rate_limiter.trust_proxy);
 
     if !rate_limiter.check(ip) {
         return Err(StatusCode::TOO_MANY_REQUESTS);

@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,9 @@ pub struct ConfigFile {
 
     #[serde(default = "default_cors_origins")]
     pub cors_origins: String,
+
+    #[serde(default)]
+    pub trust_proxy: bool,
 
     #[serde(default = "default_max_requests_per_minute")]
     pub max_requests_per_minute: u32,
@@ -174,7 +178,7 @@ fn default_refresh_token_expiry_days() -> i64 { 30 }
 fn default_storage_backend() -> String { "local".into() }
 fn default_storage_dir() -> String { "./data/attachments".into() }
 fn default_s3_region() -> String { "us-east-1".into() }
-fn default_cors_origins() -> String { "*".into() }
+fn default_cors_origins() -> String { "http://localhost:8080".into() }
 fn default_max_requests_per_minute() -> u32 { 1200 }
 fn default_max_ws_connections_per_user() -> u32 { 5 }
 fn default_broadcast_channel_capacity() -> usize { 4096 }
@@ -200,7 +204,7 @@ fn default_beta_code_expiry_days() -> i64 { 7 }
 
 // ─── Application Config ───────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppConfig {
     // Server
     pub host: String,
@@ -233,6 +237,9 @@ pub struct AppConfig {
 
     // CORS — comma-separated list of allowed origins (e.g. "http://localhost:5173,https://app.haven.example")
     pub cors_origins: String,
+
+    // Proxy
+    pub trust_proxy: bool,
 
     // Rate Limiting
     pub max_requests_per_minute: u32,
@@ -306,6 +313,20 @@ impl AppConfig {
         !self.turnstile_site_key.is_empty() && !self.turnstile_secret_key.is_empty()
     }
 
+    /// Validate the config, rejecting known-weak JWT secrets.
+    /// Panics if the secret is too short or contains placeholder text.
+    pub fn validate(&self) {
+        if self.jwt_secret.len() < 32 {
+            panic!(
+                "JWT_SECRET is too short ({} chars). Use at least 32 characters for security.",
+                self.jwt_secret.len()
+            );
+        }
+        if self.jwt_secret.to_lowercase().contains("change-me") {
+            panic!("JWT_SECRET contains 'change-me' — replace it with a strong random secret.");
+        }
+    }
+
     /// Returns true if LiveKit voice is configured.
     pub fn livekit_enabled(&self) -> bool {
         !self.livekit_url.is_empty()
@@ -345,6 +366,7 @@ impl AppConfig {
             s3_secret_key: String::new(),
             s3_region: String::new(),
             cors_origins: "*".into(),
+            trust_proxy: false,
             max_requests_per_minute: 1000,
             max_ws_connections_per_user: 10,
             broadcast_channel_capacity: 4096,
@@ -392,7 +414,7 @@ impl AppConfig {
 
     /// Load config from environment variables (existing behavior for PostgreSQL mode).
     pub fn from_env() -> Self {
-        Self {
+        let config = Self {
             host: env::var("HAVEN_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
             port: env::var("HAVEN_PORT")
                 .unwrap_or_else(|_| "8080".into())
@@ -435,6 +457,11 @@ impl AppConfig {
 
             cors_origins: env::var("CORS_ORIGINS")
                 .unwrap_or_else(|_| "http://localhost:5173".into()),
+
+            trust_proxy: env::var("TRUST_PROXY")
+                .unwrap_or_else(|_| "true".into())
+                .parse()
+                .unwrap_or(true),
 
             max_requests_per_minute: env::var("MAX_REQUESTS_PER_MINUTE")
                 .unwrap_or_else(|_| "300".into())
@@ -543,7 +570,9 @@ impl AppConfig {
                 .unwrap_or_else(|_| "7".into())
                 .parse()
                 .unwrap_or(7),
-        }
+        };
+        config.validate();
+        config
     }
 
     /// Load config from TOML file, auto-generating one with secure defaults if it doesn't exist.
@@ -566,7 +595,7 @@ impl AppConfig {
         let file: ConfigFile = toml::from_str(&content)
             .unwrap_or_else(|e| panic!("Failed to parse config file {}: {}", path, e));
 
-        Self {
+        let config = Self {
             host: file.host,
             port: file.port,
             database_url: file.database_url,
@@ -585,6 +614,7 @@ impl AppConfig {
             s3_secret_key: file.s3_secret_key,
             s3_region: file.s3_region,
             cors_origins: file.cors_origins,
+            trust_proxy: file.trust_proxy,
             max_requests_per_minute: file.max_requests_per_minute,
             max_ws_connections_per_user: file.max_ws_connections_per_user,
             broadcast_channel_capacity: file.broadcast_channel_capacity,
@@ -627,7 +657,9 @@ impl AppConfig {
 
             beta_code_limit: file.beta_code_limit,
             beta_code_expiry_days: file.beta_code_expiry_days,
-        }
+        };
+        config.validate();
+        config
     }
 
     /// Generate a config file with secure random secrets and sane defaults.
@@ -665,6 +697,7 @@ impl AppConfig {
             s3_secret_key: String::new(),
             s3_region: default_s3_region(),
             cors_origins: default_cors_origins(),
+            trust_proxy: false,
             max_requests_per_minute: default_max_requests_per_minute(),
             max_ws_connections_per_user: default_max_ws_connections_per_user(),
             broadcast_channel_capacity: default_broadcast_channel_capacity(),
@@ -734,6 +767,7 @@ impl AppConfig {
             s3_secret_key: file.s3_secret_key,
             s3_region: file.s3_region,
             cors_origins: file.cors_origins,
+            trust_proxy: file.trust_proxy,
             max_requests_per_minute: file.max_requests_per_minute,
             max_ws_connections_per_user: file.max_ws_connections_per_user,
             broadcast_channel_capacity: file.broadcast_channel_capacity,
@@ -777,6 +811,68 @@ impl AppConfig {
             beta_code_limit: file.beta_code_limit,
             beta_code_expiry_days: file.beta_code_expiry_days,
         }
+    }
+}
+
+impl fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database_url", &self.database_url)
+            .field("database_replica_url", &self.database_replica_url)
+            .field("db_max_connections", &self.db_max_connections)
+            .field("redis_url", &self.redis_url)
+            .field("jwt_secret", &"[REDACTED]")
+            .field("jwt_expiry_hours", &self.jwt_expiry_hours)
+            .field("refresh_token_expiry_days", &self.refresh_token_expiry_days)
+            .field("storage_backend", &self.storage_backend)
+            .field("storage_dir", &self.storage_dir)
+            .field("storage_encryption_key", &"[REDACTED]")
+            .field("s3_endpoint", &self.s3_endpoint)
+            .field("s3_bucket", &self.s3_bucket)
+            .field("s3_access_key", &self.s3_access_key)
+            .field("s3_secret_key", &"[REDACTED]")
+            .field("s3_region", &self.s3_region)
+            .field("cors_origins", &self.cors_origins)
+            .field("trust_proxy", &self.trust_proxy)
+            .field("max_requests_per_minute", &self.max_requests_per_minute)
+            .field("max_ws_connections_per_user", &self.max_ws_connections_per_user)
+            .field("broadcast_channel_capacity", &self.broadcast_channel_capacity)
+            .field("ws_heartbeat_timeout_secs", &self.ws_heartbeat_timeout_secs)
+            .field("ws_session_buffer_size", &self.ws_session_buffer_size)
+            .field("ws_session_ttl_secs", &self.ws_session_ttl_secs)
+            .field("max_upload_size_bytes", &self.max_upload_size_bytes)
+            .field("cdn_enabled", &self.cdn_enabled)
+            .field("cdn_base_url", &self.cdn_base_url)
+            .field("cdn_presign_expiry_secs", &self.cdn_presign_expiry_secs)
+            .field("livekit_url", &self.livekit_url)
+            .field("livekit_client_url", &self.livekit_client_url)
+            .field("livekit_api_key", &self.livekit_api_key)
+            .field("livekit_api_secret", &"[REDACTED]")
+            .field("livekit_bundled", &self.livekit_bundled)
+            .field("livekit_port", &self.livekit_port)
+            .field("tls_enabled", &self.tls_enabled)
+            .field("tls_port", &self.tls_port)
+            .field("tls_cert_path", &self.tls_cert_path)
+            .field("tls_key_path", &self.tls_key_path)
+            .field("tls_auto_generate", &self.tls_auto_generate)
+            .field("audit_log_retention_days", &self.audit_log_retention_days)
+            .field("resolved_report_retention_days", &self.resolved_report_retention_days)
+            .field("expired_invite_cleanup", &self.expired_invite_cleanup)
+            .field("registration_invite_only", &self.registration_invite_only)
+            .field("registration_invites_per_user", &self.registration_invites_per_user)
+            .field("giphy_api_key", &"[REDACTED]")
+            .field("turnstile_site_key", &self.turnstile_site_key)
+            .field("turnstile_secret_key", &"[REDACTED]")
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("smtp_username", &self.smtp_username)
+            .field("smtp_password", &"[REDACTED]")
+            .field("smtp_from", &self.smtp_from)
+            .field("beta_code_limit", &self.beta_code_limit)
+            .field("beta_code_expiry_days", &self.beta_code_expiry_days)
+            .finish()
     }
 }
 

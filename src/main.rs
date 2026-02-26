@@ -240,7 +240,7 @@ async fn main() {
             .clone()
             .layer(axum::middleware::from_fn(inject_https_proto));
 
-        let http_server = axum::serve(listener, app.into_make_service())
+        let http_server = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(shutdown_signal());
 
         let https_server = axum_server::bind_rustls(tls_addr, rustls_config)
@@ -256,7 +256,7 @@ async fn main() {
         }
     } else {
         // HTTP only
-        axum::serve(listener, app.into_make_service())
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(shutdown_signal())
             .await
             .expect("Server error");
