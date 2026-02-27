@@ -8,7 +8,7 @@ bind_addresses:
 
 rtc:
   port_range_start: 7882
-  port_range_end: 7882
+  port_range_end: 7892
   tcp_port: 7881
   # Let LiveKit auto-detect the server's public IP for WebRTC candidates
   use_external_ip: true
