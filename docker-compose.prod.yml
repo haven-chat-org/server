@@ -98,8 +98,8 @@ services:
     image: livekit/livekit-server:v1.9.11
     restart: unless-stopped
     ports:
-      - "7881:7881"       # WebRTC TCP
-      - "7882:7882/udp"   # WebRTC UDP
+      - "7881:7881"         # WebRTC TCP
+      - "7882-7892:7882-7892/udp"  # WebRTC UDP range
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
     volumes:
