@@ -917,6 +917,7 @@ pub struct RegistrationInvite {
     pub used_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub email_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

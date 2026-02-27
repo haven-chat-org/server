@@ -4,19 +4,27 @@ use lettre::{
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
+use sha2::{Digest, Sha256};
 
 use crate::db::queries;
 use crate::errors::{AppError, AppResult};
 use crate::models::{BetaCodeRequest, BetaCodeResponse};
 use crate::AppState;
 
+/// Hash an email address with SHA-256 for duplicate detection.
+/// Only the hash is stored — the email itself is never persisted.
+fn hash_email(email: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(email.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 /// POST /api/v1/beta/request-code
 ///
 /// Public endpoint (no auth required). Rate-limited to 3 req/min per IP.
 ///
 /// Privacy guarantee: the email address exists ONLY in the request body
-/// and the SMTP send buffer. It is NEVER written to the database, logged,
-/// or stored anywhere on disk.
+/// and the SMTP send buffer. Only a SHA-256 hash is stored for dedup.
 pub async fn request_beta_code(
     State(state): State<AppState>,
     Json(req): Json<BetaCodeRequest>,
@@ -34,24 +42,35 @@ pub async fn request_beta_code(
         return Err(AppError::Validation("Invalid email address".into()));
     }
 
-    // 3. Check global cap
-    let issued = queries::count_beta_codes(state.db.read()).await?;
-    if issued >= state.config.beta_code_limit as i64 {
-        // Intentionally vague — don't reveal the cap to scrapers
+    // 3. Check if this email already received a beta code
+    let email_hash = hash_email(&email);
+    let already_issued = queries::beta_code_exists_for_email(state.db.read(), &email_hash).await?;
+    if already_issued {
+        // Same generic response — don't reveal whether we recognized the email
         return Ok(Json(BetaCodeResponse {
             success: true,
             message: "If slots are available, you'll receive a code shortly.".into(),
         }));
     }
 
-    // 4. Create a registration invite (no email stored)
+    // 4. Check global cap
+    let issued = queries::count_beta_codes(state.db.read()).await?;
+    if issued >= state.config.beta_code_limit as i64 {
+        return Ok(Json(BetaCodeResponse {
+            success: true,
+            message: "If slots are available, you'll receive a code shortly.".into(),
+        }));
+    }
+
+    // 5. Create a registration invite (email hash stored, not the email)
     let invite = queries::create_beta_invite(
         state.db.write(),
         state.config.beta_code_expiry_days,
+        &email_hash,
     )
     .await?;
 
-    // 5. Send the email (fire-and-forget: spawn so we don't block the response)
+    // 6. Send the email (fire-and-forget: spawn so we don't block the response)
     let smtp_host = state.config.smtp_host.clone();
     let smtp_port = state.config.smtp_port;
     let smtp_username = state.config.smtp_username.clone();
@@ -86,7 +105,7 @@ pub async fn request_beta_code(
         // After this block, `email` is dropped and gone forever.
     });
 
-    // 6. Always return success (don't leak whether email was valid/duplicate)
+    // 7. Always return success (don't leak whether email was valid/duplicate)
     Ok(Json(BetaCodeResponse {
         success: true,
         message: "If slots are available, you'll receive a code shortly.".into(),

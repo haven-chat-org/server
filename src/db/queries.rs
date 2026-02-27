@@ -3214,17 +3214,29 @@ pub async fn count_beta_codes(pool: &Pool) -> AppResult<i64> {
     Ok(row.0)
 }
 
-/// Create a beta invite (created_by = NULL, with expiry).
-pub async fn create_beta_invite(pool: &Pool, expiry_days: i64) -> AppResult<RegistrationInvite> {
+/// Check if a beta code already exists for the given email hash.
+pub async fn beta_code_exists_for_email(pool: &Pool, email_hash: &str) -> AppResult<bool> {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM registration_invites WHERE email_hash = $1)",
+    )
+    .bind(email_hash)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Create a beta invite (created_by = NULL, with expiry and email hash).
+pub async fn create_beta_invite(pool: &Pool, expiry_days: i64, email_hash: &str) -> AppResult<RegistrationInvite> {
     let code = crate::crypto::generate_invite_code();
     let invite = sqlx::query_as::<_, RegistrationInvite>(
-        r#"INSERT INTO registration_invites (id, code, created_by, expires_at, created_at)
-           VALUES ($1, $2, NULL, NOW() + make_interval(days => $3), NOW())
+        r#"INSERT INTO registration_invites (id, code, created_by, expires_at, created_at, email_hash)
+           VALUES ($1, $2, NULL, NOW() + make_interval(days => $3), NOW(), $4)
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
     .bind(&code)
     .bind(expiry_days as i32)
+    .bind(email_hash)
     .fetch_one(pool)
     .await?;
     Ok(invite)
