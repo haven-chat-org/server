@@ -714,6 +714,7 @@ pub enum WsServerMessage {
     ReactionAdded {
         message_id: Uuid,
         channel_id: Uuid,
+        user_id: Uuid,
         sender_token: String,
         emoji: String,
     },
@@ -721,6 +722,7 @@ pub enum WsServerMessage {
     ReactionRemoved {
         message_id: Uuid,
         channel_id: Uuid,
+        user_id: Uuid,
         sender_token: String,
         emoji: String,
     },

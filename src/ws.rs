@@ -988,10 +988,11 @@ async fn handle_add_reaction(
         return;
     }
 
-    // Broadcast to all channel subscribers (sender_token instead of user_id)
+    // Broadcast to all channel subscribers
     let react_msg = WsServerMessage::ReactionAdded {
         message_id,
         channel_id: message.channel_id,
+        user_id,
         sender_token,
         emoji: emoji.to_string(),
     };
@@ -1038,11 +1039,12 @@ async fn handle_remove_reaction(
         Ok(true) => {}
     }
 
-    // Broadcast to all channel subscribers (sender_token instead of user_id)
+    // Broadcast to all channel subscribers
     let sender_token = Uuid::new_v4().to_string();
     let unreact_msg = WsServerMessage::ReactionRemoved {
         message_id,
         channel_id: message.channel_id,
+        user_id,
         sender_token,
         emoji: emoji.to_string(),
     };
