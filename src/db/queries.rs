@@ -585,6 +585,21 @@ pub async fn update_channel_meta(
     Ok(ch)
 }
 
+pub async fn update_channel_ttl(
+    pool: &Pool,
+    channel_id: Uuid,
+    message_ttl: Option<i32>,
+) -> AppResult<Channel> {
+    let ch = sqlx::query_as::<_, Channel>(
+        "UPDATE channels SET message_ttl = $1 WHERE id = $2 RETURNING *",
+    )
+    .bind(message_ttl)
+    .bind(channel_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(ch)
+}
+
 pub async fn delete_channel(pool: &Pool, channel_id: Uuid) -> AppResult<()> {
     // Delete members first, then message children, then messages, then the channel
     sqlx::query("DELETE FROM channel_members WHERE channel_id = $1")
@@ -962,6 +977,26 @@ pub async fn get_export_messages(
     .fetch_all(pool)
     .await?;
     Ok(messages)
+}
+
+/// Collect channel_id + message_id pairs for expired messages (before purging).
+/// Used by the purge worker to broadcast MessagesExpired events.
+pub async fn get_expired_message_ids(pool: &Pool) -> AppResult<Vec<(Uuid, Uuid)>> {
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT channel_id, id FROM messages WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Clear the expires_at field on a message (e.g., when pinning).
+pub async fn clear_message_expiry(pool: &Pool, message_id: Uuid) -> AppResult<()> {
+    sqlx::query("UPDATE messages SET expires_at = NULL WHERE id = $1")
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Purge expired messages (called by background worker).

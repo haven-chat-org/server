@@ -157,12 +157,24 @@ pub async fn send_message(
     )
     .map_err(|_| AppError::Validation("Invalid encrypted_body encoding".into()))?;
 
+    // Apply channel default TTL if client didn't set an explicit expires_at
+    let effective_expires_at = match req.expires_at {
+        Some(ea) => Some(ea),
+        None => {
+            if let Ok(Some(ch)) = queries::find_channel_by_id(state.db.read(), channel_id).await {
+                ch.message_ttl.map(|ttl| chrono::Utc::now() + chrono::Duration::seconds(ttl as i64))
+            } else {
+                None
+            }
+        }
+    };
+
     let message = queries::insert_message(
         state.db.write(),
         channel_id,
         &sender_token,
         &encrypted_body,
-        req.expires_at,
+        effective_expires_at,
         req.has_attachments,
         user_id,
         req.reply_to_id,

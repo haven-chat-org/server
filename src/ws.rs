@@ -581,13 +581,25 @@ async fn handle_send_message(
 
     let has_attachments = attachment_ids.as_ref().is_some_and(|ids| !ids.is_empty());
 
+    // Apply channel default TTL if client didn't set an explicit expires_at
+    let effective_expires_at = match expires_at {
+        Some(ea) => Some(ea),
+        None => {
+            if let Ok(Some(ch)) = queries::find_channel_by_id(state.db.read(), channel_id).await {
+                ch.message_ttl.map(|ttl| chrono::Utc::now() + chrono::Duration::seconds(ttl as i64))
+            } else {
+                None
+            }
+        }
+    };
+
     // Persist message
     let message = match queries::insert_message(
         state.db.write(),
         channel_id,
         &sender_token_bytes,
         &encrypted_body_bytes,
-        expires_at,
+        effective_expires_at,
         has_attachments,
         user_id,
         reply_to_id,
@@ -1152,6 +1164,9 @@ async fn handle_pin_message(
 
     match queries::pin_message(state.db.write(), channel_id, message_id, user_id).await {
         Ok(_) => {
+            // Pinning overrides disappearing timer — pinned messages persist
+            let _ = queries::clear_message_expiry(state.db.write(), message_id).await;
+
             let pin_msg = WsServerMessage::MessagePinned {
                 channel_id,
                 message_id,

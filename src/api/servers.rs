@@ -206,6 +206,7 @@ pub async fn list_server_channels(
             encrypted: c.encrypted,
             is_private: c.is_private,
             export_allowed: c.export_allowed,
+            message_ttl: c.message_ttl,
         });
     }
 
