@@ -31,6 +31,11 @@ pub async fn ban_member(
         return Err(AppError::Validation("Cannot ban yourself".into()));
     }
 
+    // Check if user is already banned
+    if queries::is_banned(state.db.read(), server_id, target_user_id).await? {
+        return Err(AppError::Validation("User is already banned".into()));
+    }
+
     // Create the ban record
     let ban = queries::create_ban(
         state.db.write(),
