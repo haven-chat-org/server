@@ -67,7 +67,7 @@ Most chat platforms choose between features and privacy. Haven doesn't.
 
 ## Features
 
-**Communication** — Servers with text and voice channels, 1-on-1 and group DMs, friend requests, typing indicators, online presence, link previews, @mentions, message pinning, emoji reactions, animated emojis, and supports gifs
+**Communication** — Servers with text and voice channels, 1-on-1 and group DMs, friend requests, typing indicators, online presence, link previews, @mentions, message pinning, emoji reactions, animated emojis, GIFs, and disappearing messages (Signal-style per-channel timers with automatic expiration)
 
 **Media** — Encrypted file attachments with inline image/video/audio previews, image lightbox viewer, embedded audio player with seek and volume controls, video playback with MIME normalization, spoiler overlays for sensitive content, drag-and-drop uploads with progress tracking, thumbnail previews during loading
 
@@ -195,7 +195,7 @@ All routes are under `/api/v1/`. The WebSocket endpoint is at `/api/v1/ws?token=
 | Keys | `/users/:id/keys`, `/keys/prekeys`, `/keys/backup` | X3DH key bundles, prekey management, encrypted backup |
 | Servers | `/servers`, `/servers/:id/channels` | CRUD servers, channels, icons |
 | Categories | `/servers/:id/categories` | Channel categories with ordering |
-| Messages | `/channels/:id/messages`, `/channels/:id/pins` | Send/receive encrypted messages, pinning |
+| Messages | `/channels/:id/messages`, `/channels/:id/pins` | Send/receive encrypted messages, pinning, disappearing messages |
 | Sender Keys | `/channels/:id/sender-keys` | Group E2EE key distribution |
 | Roles | `/servers/:id/roles`, `/channels/:id/overwrites` | Permission management with channel overwrites |
 | Friends | `/friends`, `/dm` | Friend requests, DMs, privacy settings |

@@ -234,6 +234,7 @@ pub async fn list_dm_requests(
             is_private: false,
             encrypted: true,
             export_allowed: ch.export_allowed,
+            message_ttl: ch.message_ttl,
         })
         .collect();
     Ok(Json(responses))

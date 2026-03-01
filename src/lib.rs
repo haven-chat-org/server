@@ -308,6 +308,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/:channel_id", put(api::channels::update_channel))
         .route("/:channel_id", delete(api::channels::delete_channel))
         .route("/:channel_id/join", post(api::channels::join_channel))
+        .route("/:channel_id/message-ttl", put(api::channels::set_message_ttl))
         .route("/:channel_id/category", put(api::categories::set_channel_category))
         .route(
             "/:channel_id/overwrites",

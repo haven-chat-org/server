@@ -9,6 +9,7 @@ use haven_backend::{
     livekit_proc,
     memory_store::MemoryStore,
     middleware::{spawn_user_rate_limit_cleanup, UserRateLimiter},
+    models,
     pubsub,
     storage::Storage,
     AppState,
@@ -137,7 +138,7 @@ async fn main() {
     state.pubsub_subscriptions = pubsub::start_subscriber(state.clone());
 
     // Spawn background workers
-    spawn_background_workers(db.clone(), &config);
+    spawn_background_workers(db.clone(), &config, state.clone());
 
     // Worker: Clean stale Redis presence entries every 60 seconds
     // If the server crashes without graceful shutdown, presence entries persist.
@@ -303,19 +304,47 @@ async fn inject_https_proto(
 
 // ─── Background Workers ────────────────────────────────
 
-fn spawn_background_workers(db: DbPools, config: &AppConfig) {
+fn spawn_background_workers(db: DbPools, config: &AppConfig, app_state: AppState) {
     let pool = db.primary().clone();
     let pool2 = pool.clone();
     let pool3 = pool.clone();
 
     // Worker: Purge expired messages every 60 seconds
+    // Collects expired message IDs first, broadcasts MessagesExpired, then deletes.
+    let purge_state = app_state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
+            // Collect expired IDs before purging so we can notify clients
+            let expired = db::queries::get_expired_message_ids(&pool)
+                .await
+                .unwrap_or_default();
+
             match db::queries::purge_expired_messages(&pool).await {
                 Ok(count) if count > 0 => {
                     tracing::info!("Purged {} expired messages", count);
+
+                    // Group by channel_id and broadcast MessagesExpired
+                    let mut by_channel: std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+                        std::collections::HashMap::new();
+                    for (channel_id, message_id) in expired {
+                        by_channel.entry(channel_id).or_default().push(message_id);
+                    }
+                    for (channel_id, message_ids) in by_channel {
+                        let msg = models::WsServerMessage::MessagesExpired {
+                            channel_id,
+                            message_ids,
+                        };
+                        if let Some(broadcaster) = purge_state.channel_broadcasts.get(&channel_id) {
+                            let _ = broadcaster.send(msg.clone());
+                        }
+                        pubsub::publish_channel_event(
+                            purge_state.redis.clone().as_mut(),
+                            channel_id,
+                            &msg,
+                        ).await;
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Failed to purge expired messages: {}", e);

@@ -265,6 +265,7 @@ pub struct Channel {
     pub is_private: bool,
     pub encrypted: bool,
     pub export_allowed: bool,
+    pub message_ttl: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -275,6 +276,7 @@ pub struct CreateChannelRequest {
     pub category_id: Option<Uuid>,
     pub is_private: Option<bool>,
     pub encrypted: Option<bool>,
+    pub message_ttl: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,6 +295,8 @@ pub struct ChannelResponse {
     pub is_private: bool,
     pub encrypted: bool,
     pub export_allowed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_ttl: Option<i32>,
 }
 
 // ─── Channel Categories ──────────────────────────────
@@ -813,6 +817,17 @@ pub enum WsServerMessage {
     },
     /// Server structure changed (channels/categories created/updated/deleted)
     ServerUpdated { server_id: Uuid },
+    /// Channel disappearing-message settings changed
+    ChannelSettingsUpdated {
+        channel_id: Uuid,
+        message_ttl: Option<i32>,
+        updated_by: Uuid,
+    },
+    /// Messages expired and were purged (real-time notification)
+    MessagesExpired {
+        channel_id: Uuid,
+        message_ids: Vec<Uuid>,
+    },
     /// Session expired or invalid — do a full reconnect
     InvalidSession,
 }

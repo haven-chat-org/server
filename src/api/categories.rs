@@ -188,5 +188,6 @@ pub async fn set_channel_category(
         is_private: updated.is_private,
         encrypted: updated.encrypted,
         export_allowed: updated.export_allowed,
+        message_ttl: updated.message_ttl,
     }))
 }

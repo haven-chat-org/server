@@ -11,6 +11,7 @@ use crate::errors::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::models::*;
 use crate::permissions;
+use crate::pubsub;
 use crate::ws::broadcast_to_server;
 use crate::AppState;
 
@@ -85,6 +86,7 @@ pub async fn create_channel(
         is_private: channel.is_private,
         encrypted: channel.encrypted,
         export_allowed: channel.export_allowed,
+        message_ttl: channel.message_ttl,
     }))
 }
 
@@ -142,6 +144,7 @@ pub async fn create_dm(
             is_private: false,
             encrypted: true,
             export_allowed: existing.export_allowed,
+            message_ttl: existing.message_ttl,
         }));
     }
 
@@ -213,6 +216,7 @@ pub async fn create_dm(
         is_private: false,
         encrypted: true,
         export_allowed: channel.export_allowed,
+        message_ttl: channel.message_ttl,
     }))
 }
 
@@ -241,6 +245,7 @@ pub async fn list_dm_channels(
             is_private: ch.is_private,
             encrypted: ch.encrypted,
             export_allowed: ch.export_allowed,
+            message_ttl: ch.message_ttl,
         })
         .collect();
     Ok(Json(responses))
@@ -331,7 +336,127 @@ pub async fn update_channel(
         is_private: updated.is_private,
         encrypted: updated.encrypted,
         export_allowed: updated.export_allowed,
+        message_ttl: updated.message_ttl,
     }))
+}
+
+/// PUT /api/v1/channels/:channel_id/message-ttl
+/// Set or clear the disappearing message timer for any channel type.
+/// Server channels: requires MANAGE_CHANNELS. DMs/groups: any member can toggle.
+pub async fn set_message_ttl(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(channel_id): Path<Uuid>,
+    Json(req): Json<SetMessageTtlRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    let channel = queries::find_channel_by_id(state.db.read(), channel_id)
+        .await?
+        .ok_or(AppError::NotFound("Channel not found".into()))?;
+
+    // Permission check: server channels need MANAGE_CHANNELS, DM/group just need membership
+    if let Some(server_id) = channel.server_id {
+        queries::require_server_permission(
+            state.db.read(),
+            server_id,
+            user_id,
+            permissions::MANAGE_CHANNELS,
+        )
+        .await?;
+    } else {
+        // DM/group: verify membership
+        match queries::can_access_channel(state.db.read(), channel_id, user_id).await {
+            Ok(true) => {}
+            _ => return Err(AppError::Forbidden("Not a member of this channel".into())),
+        }
+    }
+
+    // Validate: must be null or one of the allowed durations
+    const ALLOWED_TTLS: &[i32] = &[30, 300, 3600, 28800, 86400, 604800];
+    if let Some(ttl) = req.message_ttl {
+        if !ALLOWED_TTLS.contains(&ttl) {
+            return Err(AppError::Validation(
+                "Invalid timer duration. Allowed: 30, 300, 3600, 28800, 86400, 604800".into(),
+            ));
+        }
+    }
+
+    // Skip if no change
+    if req.message_ttl == channel.message_ttl {
+        return Ok(Json(serde_json::json!({ "message_ttl": channel.message_ttl })));
+    }
+
+    queries::update_channel_ttl(state.db.write(), channel_id, req.message_ttl).await?;
+
+    // Insert system message about the change
+    let user = queries::find_user_by_id(state.db.read(), user_id).await?;
+    let username = user
+        .as_ref()
+        .map(|u| u.display_name.as_deref().unwrap_or(&u.username).to_string())
+        .unwrap_or_else(|| "Someone".to_string());
+
+    let (event, duration_label) = match req.message_ttl {
+        Some(30) => ("disappearing_messages_set", "30 seconds"),
+        Some(300) => ("disappearing_messages_set", "5 minutes"),
+        Some(3600) => ("disappearing_messages_set", "1 hour"),
+        Some(28800) => ("disappearing_messages_set", "8 hours"),
+        Some(86400) => ("disappearing_messages_set", "1 day"),
+        Some(604800) => ("disappearing_messages_set", "1 week"),
+        _ => ("disappearing_messages_off", ""),
+    };
+
+    let body = serde_json::json!({
+        "event": event,
+        "username": username,
+        "user_id": user_id.to_string(),
+        "duration": duration_label,
+    });
+    if let Ok(sys_msg) = queries::insert_system_message(
+        state.db.write(), channel_id, &body.to_string(),
+    ).await {
+        let response: MessageResponse = sys_msg.into();
+        let sys_ws_msg = WsServerMessage::NewMessage(response);
+        if let Some(broadcaster) = state.channel_broadcasts.get(&channel_id) {
+            let _ = broadcaster.send(sys_ws_msg.clone());
+        }
+        pubsub::publish_channel_event(state.redis.clone().as_mut(), channel_id, &sys_ws_msg).await;
+    }
+
+    // Broadcast settings change to channel subscribers
+    let settings_msg = WsServerMessage::ChannelSettingsUpdated {
+        channel_id,
+        message_ttl: req.message_ttl,
+        updated_by: user_id,
+    };
+    if let Some(broadcaster) = state.channel_broadcasts.get(&channel_id) {
+        let _ = broadcaster.send(settings_msg.clone());
+    }
+    pubsub::publish_channel_event(state.redis.clone().as_mut(), channel_id, &settings_msg).await;
+
+    // For DM/group, also deliver directly to all member connections
+    if channel.channel_type == "dm" || channel.channel_type == "group" {
+        if let Ok(member_ids) = queries::get_channel_member_ids(state.db.read(), channel_id).await {
+            for member_id in member_ids {
+                if member_id == user_id { continue; }
+                if let Some(conns) = state.connections.get(&member_id) {
+                    for conn in conns.iter() {
+                        let _ = conn.send(settings_msg.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Audit log for server channels
+    if let Some(server_id) = channel.server_id {
+        let _ = queries::insert_audit_log(
+            state.db.write(), server_id, user_id, "channel_ttl_update",
+            Some("channel"), Some(channel_id),
+            Some(&serde_json::json!({ "message_ttl": req.message_ttl })),
+            None,
+        ).await;
+    }
+
+    Ok(Json(serde_json::json!({ "message_ttl": req.message_ttl })))
 }
 
 /// PUT /api/v1/servers/:server_id/channels/reorder
@@ -480,6 +605,7 @@ pub async fn create_group_dm(
         is_private: false,
         encrypted: true,
         export_allowed: channel.export_allowed,
+        message_ttl: channel.message_ttl,
     }))
 }
 
@@ -583,11 +709,20 @@ pub struct CreateDmRequest {
     pub encrypted_meta: String, // base64
 }
 
-/// Request type for channel updates (rename, encryption toggle).
+/// Request type for setting disappearing message timer.
+#[derive(Debug, serde::Deserialize)]
+pub struct SetMessageTtlRequest {
+    /// Timer in seconds. null = disable disappearing messages.
+    pub message_ttl: Option<i32>,
+}
+
+/// Request type for channel updates (rename, encryption toggle, disappearing messages).
 #[derive(Debug, serde::Deserialize)]
 pub struct UpdateChannelRequest {
     pub encrypted_meta: String, // base64
     pub encrypted: Option<bool>,
+    /// Disappearing message timer in seconds. Absent = no change, Some(null) = disable, Some(n) = enable.
+    pub message_ttl: Option<Option<i32>>,
 }
 
 /// Send a WS message to a specific user (all their connections + Redis pub/sub).
