@@ -884,3 +884,122 @@ pub async fn export_server(
         include_attachments: params.include_attachments,
     }))
 }
+
+// ─── Content Filters ─────────────────────────────────
+
+/// GET /api/v1/servers/:server_id/content-filters
+pub async fn list_content_filters(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(server_id): Path<Uuid>,
+) -> AppResult<Json<Vec<ContentFilterResponse>>> {
+    // Verify membership
+    if !queries::is_server_member(state.db.read(), server_id, user_id).await? {
+        return Err(AppError::Forbidden("Not a member of this server".into()));
+    }
+
+    let filters = queries::list_content_filters(state.db.read(), server_id).await?;
+    Ok(Json(
+        filters
+            .into_iter()
+            .map(|f| ContentFilterResponse {
+                id: f.id,
+                pattern: f.pattern,
+                filter_type: f.filter_type,
+                action: f.action,
+                created_by: f.created_by,
+                created_at: f.created_at,
+            })
+            .collect(),
+    ))
+}
+
+/// POST /api/v1/servers/:server_id/content-filters
+pub async fn create_content_filter(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(server_id): Path<Uuid>,
+    Json(req): Json<CreateContentFilterRequest>,
+) -> AppResult<Json<ContentFilterResponse>> {
+    queries::require_server_permission(
+        state.db.read(),
+        server_id,
+        user_id,
+        permissions::MANAGE_SERVER,
+    )
+    .await?;
+
+    // Validate pattern
+    if req.pattern.is_empty() || req.pattern.len() > 200 {
+        return Err(AppError::Validation(
+            "Pattern must be between 1 and 200 characters".into(),
+        ));
+    }
+
+    let filter_type = req.filter_type.as_deref().unwrap_or("keyword");
+    let action = req.action.as_deref().unwrap_or("hide");
+
+    // Validate filter_type
+    if filter_type != "keyword" && filter_type != "regex" {
+        return Err(AppError::Validation(
+            "filter_type must be 'keyword' or 'regex'".into(),
+        ));
+    }
+
+    // Validate action
+    if action != "hide" && action != "warn" {
+        return Err(AppError::Validation(
+            "action must be 'hide' or 'warn'".into(),
+        ));
+    }
+
+    // Validate regex patterns
+    if filter_type == "regex" && regex::Regex::new(&req.pattern).is_err() {
+        return Err(AppError::Validation("Invalid regex pattern".into()));
+    }
+
+    // Max 50 filters per server
+    let count = queries::count_content_filters(state.db.read(), server_id).await?;
+    if count >= 50 {
+        return Err(AppError::Validation(
+            "Maximum of 50 content filters per server".into(),
+        ));
+    }
+
+    let filter = queries::create_content_filter(
+        state.db.write(),
+        server_id,
+        &req.pattern,
+        filter_type,
+        action,
+        user_id,
+    )
+    .await?;
+
+    Ok(Json(ContentFilterResponse {
+        id: filter.id,
+        pattern: filter.pattern,
+        filter_type: filter.filter_type,
+        action: filter.action,
+        created_by: filter.created_by,
+        created_at: filter.created_at,
+    }))
+}
+
+/// DELETE /api/v1/servers/:server_id/content-filters/:filter_id
+pub async fn delete_content_filter(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path((server_id, filter_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Json<serde_json::Value>> {
+    queries::require_server_permission(
+        state.db.read(),
+        server_id,
+        user_id,
+        permissions::MANAGE_SERVER,
+    )
+    .await?;
+
+    queries::delete_content_filter(state.db.write(), filter_id, server_id).await?;
+    Ok(Json(serde_json::json!({ "deleted": true })))
+}

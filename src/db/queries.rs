@@ -1067,11 +1067,12 @@ pub async fn link_attachment(
     attachment_id: Uuid,
     message_id: Uuid,
     storage_key: &str,
+    file_hash: Option<&str>,
 ) -> AppResult<Attachment> {
     let att = sqlx::query_as::<_, Attachment>(
         r#"
-        INSERT INTO attachments (id, message_id, storage_key, encrypted_meta, size_bucket, created_at)
-        VALUES ($1, $2, $3, $4, 0, CURRENT_TIMESTAMP)
+        INSERT INTO attachments (id, message_id, storage_key, encrypted_meta, size_bucket, created_at, file_hash)
+        VALUES ($1, $2, $3, $4, 0, CURRENT_TIMESTAMP, $5)
         RETURNING *
         "#,
     )
@@ -1079,6 +1080,7 @@ pub async fn link_attachment(
     .bind(message_id)
     .bind(storage_key)
     .bind(&[] as &[u8])
+    .bind(file_hash)
     .fetch_one(pool)
     .await?;
     Ok(att)
@@ -1098,11 +1100,12 @@ pub async fn insert_attachment(
     storage_key: &str,
     encrypted_meta: &[u8],
     size_bucket: i32,
+    file_hash: Option<&str>,
 ) -> AppResult<Attachment> {
     let att = sqlx::query_as::<_, Attachment>(
         r#"
-        INSERT INTO attachments (id, message_id, storage_key, encrypted_meta, size_bucket, created_at)
-        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+        INSERT INTO attachments (id, message_id, storage_key, encrypted_meta, size_bucket, created_at, file_hash)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6)
         RETURNING *
         "#,
     )
@@ -1111,9 +1114,99 @@ pub async fn insert_attachment(
     .bind(storage_key)
     .bind(encrypted_meta)
     .bind(size_bucket)
+    .bind(file_hash)
     .fetch_one(pool)
     .await?;
     Ok(att)
+}
+
+// ─── Blocked Hashes ──────────────────────────────────
+
+pub async fn is_hash_blocked(pool: &Pool, hash: &str) -> AppResult<bool> {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM blocked_hashes WHERE hash = $1)",
+    )
+    .bind(hash)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+pub async fn list_blocked_hashes(
+    pool: &Pool,
+    limit: i64,
+    offset: i64,
+) -> AppResult<Vec<BlockedHashResponse>> {
+    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Uuid, DateTime<Utc>, String)>(
+        r#"
+        SELECT bh.id, bh.hash, bh.description, bh.added_by, bh.created_at, u.username
+        FROM blocked_hashes bh
+        JOIN users u ON u.id = bh.added_by
+        ORDER BY bh.created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, hash, description, _added_by, created_at, username)| BlockedHashResponse {
+            id,
+            hash,
+            description,
+            added_by_username: username,
+            created_at: created_at.to_rfc3339(),
+        })
+        .collect())
+}
+
+pub async fn create_blocked_hash(
+    pool: &Pool,
+    hash: &str,
+    description: Option<&str>,
+    added_by: Uuid,
+) -> AppResult<BlockedHash> {
+    let bh = sqlx::query_as::<_, BlockedHash>(
+        r#"
+        INSERT INTO blocked_hashes (hash, description, added_by)
+        VALUES ($1, $2, $3)
+        RETURNING *
+        "#,
+    )
+    .bind(hash)
+    .bind(description)
+    .bind(added_by)
+    .fetch_one(pool)
+    .await?;
+    Ok(bh)
+}
+
+pub async fn delete_blocked_hash(pool: &Pool, hash_id: Uuid) -> AppResult<()> {
+    sqlx::query("DELETE FROM blocked_hashes WHERE id = $1")
+        .bind(hash_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn count_blocked_hashes(pool: &Pool) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blocked_hashes")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.0)
+}
+
+pub async fn find_attachments_by_hash(pool: &Pool, hash: &str) -> AppResult<Vec<Attachment>> {
+    let atts = sqlx::query_as::<_, Attachment>(
+        "SELECT * FROM attachments WHERE file_hash = $1",
+    )
+    .bind(hash)
+    .fetch_all(pool)
+    .await?;
+    Ok(atts)
 }
 
 // ─── Invites ──────────────────────────────────────────
@@ -3298,4 +3391,304 @@ pub async fn create_accepted_friendship(pool: &Pool, user_a: Uuid, user_b: Uuid)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ─── Admin Report Triage ─────────────────────────────
+
+pub async fn list_reports_admin(
+    pool: &Pool,
+    status_filter: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> AppResult<Vec<crate::models::AdminReportResponse>> {
+    let rows = if let Some(status) = status_filter {
+        sqlx::query_as::<_, (Uuid, Uuid, String, Uuid, Uuid, String, String, Option<Uuid>, Option<chrono::DateTime<chrono::Utc>>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>, chrono::DateTime<chrono::Utc>)>(
+            r#"
+            SELECT r.id, r.reporter_id, u.username, r.message_id, r.channel_id, r.reason, r.status,
+                   r.reviewed_by, r.reviewed_at, r.admin_notes,
+                   r.escalated_to, r.escalated_at, r.escalated_by, r.created_at
+            FROM reports r
+            JOIN users u ON u.id = r.reporter_id
+            WHERE r.status = $1
+            ORDER BY r.created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(status)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, (Uuid, Uuid, String, Uuid, Uuid, String, String, Option<Uuid>, Option<chrono::DateTime<chrono::Utc>>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>, chrono::DateTime<chrono::Utc>)>(
+            r#"
+            SELECT r.id, r.reporter_id, u.username, r.message_id, r.channel_id, r.reason, r.status,
+                   r.reviewed_by, r.reviewed_at, r.admin_notes,
+                   r.escalated_to, r.escalated_at, r.escalated_by, r.created_at
+            FROM reports r
+            JOIN users u ON u.id = r.reporter_id
+            ORDER BY r.created_at DESC
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows.into_iter().map(|(id, reporter_id, reporter_username, message_id, channel_id, reason, status, reviewed_by, reviewed_at, admin_notes, escalated_to, escalated_at, escalated_by, created_at)| {
+        crate::models::AdminReportResponse {
+            id,
+            reporter_id,
+            reporter_username,
+            message_id,
+            channel_id,
+            reason,
+            status,
+            reviewed_by,
+            reviewed_at,
+            admin_notes,
+            escalated_to,
+            escalated_at,
+            escalated_by,
+            created_at,
+        }
+    }).collect())
+}
+
+pub async fn get_report_admin(
+    pool: &Pool,
+    report_id: Uuid,
+) -> AppResult<Option<crate::models::AdminReportResponse>> {
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, Uuid, Uuid, String, String, Option<Uuid>, Option<chrono::DateTime<chrono::Utc>>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>, chrono::DateTime<chrono::Utc>)>(
+        r#"
+        SELECT r.id, r.reporter_id, u.username, r.message_id, r.channel_id, r.reason, r.status,
+               r.reviewed_by, r.reviewed_at, r.admin_notes,
+               r.escalated_to, r.escalated_at, r.escalated_by, r.created_at
+        FROM reports r
+        JOIN users u ON u.id = r.reporter_id
+        WHERE r.id = $1
+        "#,
+    )
+    .bind(report_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(id, reporter_id, reporter_username, message_id, channel_id, reason, status, reviewed_by, reviewed_at, admin_notes, escalated_to, escalated_at, escalated_by, created_at)| {
+        crate::models::AdminReportResponse {
+            id,
+            reporter_id,
+            reporter_username,
+            message_id,
+            channel_id,
+            reason,
+            status,
+            reviewed_by,
+            reviewed_at,
+            admin_notes,
+            escalated_to,
+            escalated_at,
+            escalated_by,
+            created_at,
+        }
+    }))
+}
+
+pub async fn update_report_status(
+    pool: &Pool,
+    report_id: Uuid,
+    status: &str,
+    reviewed_by: Uuid,
+    admin_notes: Option<&str>,
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE reports
+        SET status = $1, reviewed_by = $2, reviewed_at = NOW(), admin_notes = $3
+        WHERE id = $4
+        "#,
+    )
+    .bind(status)
+    .bind(reviewed_by)
+    .bind(admin_notes)
+    .bind(report_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn escalate_report(
+    pool: &Pool,
+    report_id: Uuid,
+    escalated_by: Uuid,
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE reports
+        SET status = 'escalated_ncmec', escalated_to = 'ncmec', escalated_at = NOW(),
+            escalated_by = $1, reviewed_by = $1, reviewed_at = NOW()
+        WHERE id = $2
+        "#,
+    )
+    .bind(escalated_by)
+    .bind(report_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn count_reports_by_status(pool: &Pool) -> AppResult<crate::models::ReportCounts> {
+    let row: (i64, i64, i64, i64) = sqlx::query_as(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+            COUNT(*) FILTER (WHERE status = 'reviewed') AS reviewed,
+            COUNT(*) FILTER (WHERE status = 'dismissed') AS dismissed,
+            COUNT(*) FILTER (WHERE status = 'escalated_ncmec') AS escalated
+        FROM reports
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(crate::models::ReportCounts {
+        pending: row.0,
+        reviewed: row.1,
+        dismissed: row.2,
+        escalated: row.3,
+    })
+}
+
+// ─── Instance Bans ───────────────────────────────────
+
+pub async fn create_instance_ban(
+    pool: &Pool,
+    user_id: Uuid,
+    reason: Option<&str>,
+    banned_by: Uuid,
+) -> AppResult<crate::models::InstanceBan> {
+    let ban = sqlx::query_as::<_, crate::models::InstanceBan>(
+        "INSERT INTO instance_bans (user_id, reason, banned_by) VALUES ($1, $2, $3) RETURNING *",
+    )
+    .bind(user_id)
+    .bind(reason)
+    .bind(banned_by)
+    .fetch_one(pool)
+    .await?;
+    Ok(ban)
+}
+
+pub async fn remove_instance_ban(pool: &Pool, user_id: Uuid) -> AppResult<()> {
+    sqlx::query("DELETE FROM instance_bans WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_instance_bans(
+    pool: &Pool,
+    limit: i64,
+    offset: i64,
+) -> AppResult<Vec<crate::models::InstanceBanResponse>> {
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Uuid, chrono::DateTime<chrono::Utc>, String, String)>(
+        r#"
+        SELECT ib.id, ib.user_id, ib.reason, ib.banned_by, ib.created_at,
+               u.username, admin.username
+        FROM instance_bans ib
+        JOIN users u ON u.id = ib.user_id
+        JOIN users admin ON admin.id = ib.banned_by
+        ORDER BY ib.created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|(id, user_id, reason, banned_by, created_at, username, banned_by_username)| {
+        crate::models::InstanceBanResponse {
+            id,
+            user_id,
+            username,
+            reason,
+            banned_by,
+            banned_by_username,
+            created_at: created_at.to_rfc3339(),
+        }
+    }).collect())
+}
+
+pub async fn is_instance_banned(pool: &Pool, user_id: Uuid) -> AppResult<bool> {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM instance_bans WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+// ─── Content Filters ─────────────────────────────────
+
+pub async fn list_content_filters(
+    pool: &Pool,
+    server_id: Uuid,
+) -> AppResult<Vec<crate::models::ContentFilter>> {
+    let filters = sqlx::query_as::<_, crate::models::ContentFilter>(
+        "SELECT * FROM content_filters WHERE server_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(server_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(filters)
+}
+
+pub async fn create_content_filter(
+    pool: &Pool,
+    server_id: Uuid,
+    pattern: &str,
+    filter_type: &str,
+    action: &str,
+    created_by: Uuid,
+) -> AppResult<crate::models::ContentFilter> {
+    let filter = sqlx::query_as::<_, crate::models::ContentFilter>(
+        r#"
+        INSERT INTO content_filters (server_id, pattern, filter_type, action, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+        "#,
+    )
+    .bind(server_id)
+    .bind(pattern)
+    .bind(filter_type)
+    .bind(action)
+    .bind(created_by)
+    .fetch_one(pool)
+    .await?;
+    Ok(filter)
+}
+
+pub async fn delete_content_filter(
+    pool: &Pool,
+    filter_id: Uuid,
+    server_id: Uuid,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM content_filters WHERE id = $1 AND server_id = $2")
+        .bind(filter_id)
+        .bind(server_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn count_content_filters(pool: &Pool, server_id: Uuid) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM content_filters WHERE server_id = $1",
+    )
+    .bind(server_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
 }

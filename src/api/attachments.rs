@@ -1,7 +1,7 @@
 use axum::{
     body::Bytes,
     extract::{Path as AxumPath, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Redirect},
     Json,
 };
@@ -18,9 +18,11 @@ use crate::AppState;
 /// Receives encrypted blob bytes, stores them.
 /// When CDN is enabled, stores raw (no server-side encryption — client-side E2EE is sufficient).
 /// When CDN is disabled, applies server-side AES-256-GCM encryption at rest.
+/// Optionally checks X-File-Hash header against the blocked hashes table.
 pub async fn upload(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
+    headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<UploadResponse>> {
     // Per-user rate limit
@@ -38,6 +40,23 @@ pub async fn upload(
 
     if body.is_empty() {
         return Err(AppError::Validation("Empty upload body".into()));
+    }
+
+    // Check X-File-Hash header against blocked hashes
+    let file_hash = headers
+        .get("x-file-hash")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_lowercase());
+
+    if let Some(ref hash) = file_hash {
+        // Validate format: 64 hex characters (SHA-256)
+        if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(AppError::Validation("Invalid file hash format (expected 64 hex characters)".into()));
+        }
+
+        if queries::is_hash_blocked(state.db.read(), hash).await? {
+            return Err(AppError::Forbidden("Upload rejected".into()));
+        }
     }
 
     let attachment_id = Uuid::new_v4();
@@ -60,6 +79,11 @@ pub async fn upload(
     }
 
     tracing::debug!("Stored attachment {} ({} bytes, cdn={})", attachment_id, body.len(), state.config.cdn_enabled);
+
+    // Store file hash for later linking to the attachment record
+    if let Some(hash) = file_hash {
+        state.memory.pending_file_hashes.insert(attachment_id, hash);
+    }
 
     Ok(Json(UploadResponse {
         attachment_id,
