@@ -38,6 +38,8 @@ pub struct MemoryStore {
     pub active_calls: Arc<DashMap<Uuid, ActiveCall>>,
     /// Connected (accepted) calls: channel_id → connected call state
     pub connected_calls: Arc<DashMap<Uuid, ConnectedCall>>,
+    /// Pending file hashes: attachment_id → SHA-256 hash (set during upload, consumed during link)
+    pub pending_file_hashes: Arc<DashMap<Uuid, String>>,
 }
 
 impl Default for MemoryStore {
@@ -51,6 +53,7 @@ impl Default for MemoryStore {
             voice_deafened: Arc::new(DashMap::new()),
             active_calls: Arc::new(DashMap::new()),
             connected_calls: Arc::new(DashMap::new()),
+            pending_file_hashes: Arc::new(DashMap::new()),
         }
     }
 }

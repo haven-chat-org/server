@@ -468,6 +468,7 @@ pub struct Attachment {
     pub encrypted_meta: Vec<u8>,
     pub size_bucket: i32,
     pub created_at: DateTime<Utc>,
+    pub file_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1314,6 +1315,130 @@ pub struct BanResponse {
 #[derive(Debug, Deserialize)]
 pub struct CreateBanRequest {
     pub reason: Option<String>,
+}
+
+// ─── Admin Report Triage ─────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct AdminReportResponse {
+    pub id: Uuid,
+    pub reporter_id: Uuid,
+    pub reporter_username: String,
+    pub message_id: Uuid,
+    pub channel_id: Uuid,
+    pub reason: String,
+    pub status: String,
+    pub reviewed_by: Option<Uuid>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub admin_notes: Option<String>,
+    pub escalated_to: Option<String>,
+    pub escalated_at: Option<DateTime<Utc>>,
+    pub escalated_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateReportRequest {
+    pub status: String,
+    pub admin_notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReportFilterQuery {
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReportCounts {
+    pub pending: i64,
+    pub reviewed: i64,
+    pub dismissed: i64,
+    pub escalated: i64,
+}
+
+// ─── Instance Bans ───────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct InstanceBan {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub reason: Option<String>,
+    pub banned_by: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstanceBanResponse {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub username: String,
+    pub reason: Option<String>,
+    pub banned_by: Uuid,
+    pub banned_by_username: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateInstanceBanRequest {
+    pub reason: Option<String>,
+}
+
+// ─── Content Filters ─────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ContentFilter {
+    pub id: Uuid,
+    pub server_id: Uuid,
+    pub pattern: String,
+    pub filter_type: String,
+    pub action: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContentFilterResponse {
+    pub id: Uuid,
+    pub pattern: String,
+    pub filter_type: String,
+    pub action: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateContentFilterRequest {
+    pub pattern: String,
+    pub filter_type: Option<String>,
+    pub action: Option<String>,
+}
+
+// ─── Blocked Hashes ──────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BlockedHash {
+    pub id: Uuid,
+    pub hash: String,
+    pub description: Option<String>,
+    pub added_by: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BlockedHashResponse {
+    pub id: Uuid,
+    pub hash: String,
+    pub description: Option<String>,
+    pub added_by_username: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateBlockedHashRequest {
+    pub hash: String,
+    pub description: Option<String>,
 }
 
 // ─── Custom Emojis ───────────────────────────────────

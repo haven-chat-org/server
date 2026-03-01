@@ -290,6 +290,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/:server_id/emojis/:emoji_id/image",
             get(api::emojis::get_emoji_image),
+        )
+        .route(
+            "/:server_id/content-filters",
+            get(api::servers::list_content_filters)
+                .post(api::servers::create_content_filter),
+        )
+        .route(
+            "/:server_id/content-filters/:filter_id",
+            delete(api::servers::delete_content_filter),
         );
 
     // Channel routes
@@ -481,6 +490,25 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/registration-invites/:invite_id",
             delete(api::registration_invites::admin_delete_invite),
+        )
+        .route("/reports", get(api::admin::list_reports))
+        .route("/reports/counts", get(api::admin::report_counts))
+        .route(
+            "/reports/:report_id",
+            get(api::admin::get_report).put(api::admin::update_report),
+        )
+        .route("/bans", get(api::admin::list_instance_bans))
+        .route(
+            "/bans/:user_id",
+            post(api::admin::instance_ban_user).delete(api::admin::instance_revoke_ban),
+        )
+        .route(
+            "/blocked-hashes",
+            get(api::admin::list_blocked_hashes).post(api::admin::create_blocked_hash),
+        )
+        .route(
+            "/blocked-hashes/:hash_id",
+            delete(api::admin::delete_blocked_hash),
         );
 
     // Beta code request (public, strict rate limit: 3 req/min per IP)

@@ -62,6 +62,13 @@ pub async fn ws_handler(
     let claims = validate_access_token(&auth.token, &state.config)?;
     let user_id = user_id_from_claims(&claims)?;
 
+    // Check instance ban
+    if queries::is_instance_banned(state.db.read(), user_id).await? {
+        return Err(AppError::Forbidden(
+            "Your account has been banned from this platform".into(),
+        ));
+    }
+
     // Check connection limit
     let conn_count = state
         .connections
@@ -601,7 +608,8 @@ async fn handle_send_message(
     if let Some(ids) = attachment_ids {
         for att_id in ids {
             let storage_key = crate::storage::obfuscated_key(&state.storage_key, &att_id.to_string());
-            if let Err(e) = queries::link_attachment(state.db.write(), att_id, message.id, &storage_key).await {
+            let file_hash = state.memory.pending_file_hashes.remove(&att_id).map(|(_, v)| v);
+            if let Err(e) = queries::link_attachment(state.db.write(), att_id, message.id, &storage_key, file_hash.as_deref()).await {
                 tracing::error!("Failed to link attachment {}: {}", att_id, e);
             }
         }
