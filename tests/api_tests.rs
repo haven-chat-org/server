@@ -150,7 +150,17 @@ async fn list_servers_includes_created_server(pool: Pool) {
 
     assert_eq!(status, StatusCode::OK);
     let servers = value.as_array().unwrap();
-    assert_eq!(servers.len(), 1);
+    // User may also have auto-created Haven server from system user migration
+    assert!(servers.iter().any(|s| {
+        String::from_utf8_lossy(
+            &base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                s["encrypted_meta"].as_str().unwrap_or(""),
+            )
+            .unwrap_or_default(),
+        )
+        .contains("My Server")
+    }));
 }
 
 #[cfg_attr(feature = "postgres", sqlx::test(migrations = "./migrations"))]
@@ -545,14 +555,15 @@ async fn decline_friend_request(pool: Pool) {
         .await;
     assert_eq!(status, StatusCode::OK);
 
-    // A's friends list should be empty (or no accepted friends)
+    // A's friends list should have no accepted friends with decl_b
     let (_, val) = app
         .request(Method::GET, "/api/v1/friends", Some(&token_a), None)
         .await;
     let friends = val.as_array().unwrap();
-    assert!(friends
-        .iter()
-        .all(|f| f["status"].as_str() != Some("accepted")));
+    assert!(!friends.iter().any(|f| {
+        f["status"].as_str() == Some("accepted")
+            && f["friend"]["username"].as_str() == Some("decl_b")
+    }));
 }
 
 #[cfg_attr(feature = "postgres", sqlx::test(migrations = "./migrations"))]
@@ -1068,19 +1079,19 @@ async fn create_and_list_dm(pool: Pool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["channel_type"].as_str(), Some("dm"));
 
-    // List DMs for user A
+    // List DMs for user A (may also include auto-created Haven DM)
     let (status, value) = app
         .request(Method::GET, "/api/v1/dm", Some(&token_a), None)
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(value.as_array().unwrap().len(), 1);
+    assert!(value.as_array().unwrap().len() >= 1);
 
-    // User B should also see the DM
+    // User B should also see the DM (may also include auto-created Haven DM)
     let (status, value) = app
         .request(Method::GET, "/api/v1/dm", Some(&token_b), None)
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(value.as_array().unwrap().len(), 1);
+    assert!(value.as_array().unwrap().len() >= 1);
 }
 
 #[cfg_attr(feature = "postgres", sqlx::test(migrations = "./migrations"))]
@@ -1854,12 +1865,14 @@ async fn remove_friend(pool: Pool) {
         .await;
     assert_eq!(status, StatusCode::OK);
 
-    // Friends list should be empty
+    // Friends list should no longer contain remove_b
     let (_, value) = app
         .request(Method::GET, "/api/v1/friends", Some(&token_a), None)
         .await;
     let friends = value.as_array().unwrap();
-    assert!(friends.is_empty());
+    assert!(!friends.iter().any(|f| {
+        f["friend"]["username"].as_str() == Some("remove_b")
+    }));
 }
 
 // ─── Reactions ──────────────────────────────────────────
@@ -2690,13 +2703,13 @@ async fn profile_shows_mutual_friends(pool: Pool) {
     app.make_friends(&token_a, &token_c, "mut_c").await;
     app.make_friends(&token_b, &token_c, "mut_c").await;
 
-    // A views B's profile — mutual friend should be C
+    // A views B's profile — mutual friends should include C
+    // (may also include Haven system user who auto-friends everyone)
     let uri = format!("/api/v1/users/{}/profile", user_b);
     let (_, value) = app.request(Method::GET, &uri, Some(&token_a), None).await;
-    assert_eq!(value["mutual_friend_count"].as_i64(), Some(1));
+    assert!(value["mutual_friend_count"].as_i64().unwrap() >= 1);
     let mutuals = value["mutual_friends"].as_array().unwrap();
-    assert_eq!(mutuals.len(), 1);
-    assert_eq!(mutuals[0]["username"].as_str(), Some("mut_c"));
+    assert!(mutuals.iter().any(|m| m["username"].as_str() == Some("mut_c")));
 }
 
 #[cfg_attr(feature = "postgres", sqlx::test(migrations = "./migrations"))]
