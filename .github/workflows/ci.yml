@@ -30,3 +30,39 @@ jobs:
 
       - run: cargo check --features postgres,embed-ui
       - run: cargo clippy --workspace -- -D warnings
+
+  test-server:
+    name: Server Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: haven
+          POSTGRES_PASSWORD: haven_secret
+          POSTGRES_DB: haven
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U haven"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://haven:haven_secret@localhost:5432/haven
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --no-default-features --features postgres

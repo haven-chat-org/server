@@ -10,7 +10,7 @@ use crate::middleware::AdminUser;
 use crate::models::{
     AdminSearchQuery, AdminStats, AdminUserResponse, CreateBlockedHashRequest,
     CreateInstanceBanRequest, PaginationQuery, ReportCounts, ReportFilterQuery, SetAdminRequest,
-    UpdateReportRequest,
+    UpdateReportRequest, WsServerMessage,
 };
 use crate::AppState;
 
@@ -102,7 +102,147 @@ pub async fn delete_user(
         .await?
         .ok_or(crate::errors::AppError::NotFound("User not found".into()))?;
 
+    // 1. Delete servers owned by this user (CASCADE handles members, channels, etc.)
+    let owned_servers = queries::get_servers_owned_by(state.db.read(), user_id).await?;
+    for server in &owned_servers {
+        let emojis = queries::list_server_emojis(state.db.read(), server.id)
+            .await
+            .unwrap_or_default();
+        for emoji in &emojis {
+            let _ = state.storage.delete_blob(&emoji.storage_key).await;
+        }
+        sqlx::query("DELETE FROM servers WHERE id = $1")
+            .bind(server.id)
+            .execute(state.db.write())
+            .await
+            .ok();
+    }
+
+    // 2. Clean up message children (no FK cascade on partitioned tables in PG < 17)
+    sqlx::query("DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE sender_id = $1)")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE sender_id = $1)")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM pinned_messages WHERE message_id IN (SELECT id FROM messages WHERE sender_id = $1)")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM reports WHERE message_id IN (SELECT id FROM messages WHERE sender_id = $1)")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+
+    // 3. Delete user's messages
+    sqlx::query("DELETE FROM messages WHERE sender_id = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+
+    // 4. Delete reactions by this user on other messages
+    sqlx::query("DELETE FROM reactions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+
+    // 5. Nullify non-cascading admin references (bans, reports, content_filters, etc.)
+    sqlx::query("UPDATE invites SET created_by = $1 WHERE created_by = $2")
+        .bind(admin_id)
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("UPDATE bans SET banned_by = $1 WHERE banned_by = $2")
+        .bind(admin_id)
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("UPDATE pinned_messages SET pinned_by = $1 WHERE pinned_by = $2")
+        .bind(admin_id)
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM reports WHERE reporter_id = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("UPDATE reports SET reviewed_by = NULL WHERE reviewed_by = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("UPDATE reports SET escalated_by = NULL WHERE escalated_by = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM instance_bans WHERE banned_by = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM content_filters WHERE created_by = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+    sqlx::query("DELETE FROM blocked_hashes WHERE added_by = $1")
+        .bind(user_id)
+        .execute(state.db.write())
+        .await
+        .ok();
+
+    // 6. Revoke tokens, broadcast offline, clean up voice
+    queries::revoke_all_user_refresh_tokens(state.db.write(), user_id)
+        .await
+        .ok();
+    crate::ws::broadcast_presence(user_id, "offline", &state).await;
+    crate::api::voice::cleanup_voice_state(&state, user_id).await;
+
+    // 7. Close active WS connections
+    if let Some((_, conns)) = state.connections.remove(&user_id) {
+        for tx in conns {
+            let _ = tx.send(WsServerMessage::Error {
+                message: "Account deleted by admin".into(),
+            });
+        }
+    }
+
+    // 8. Delete user (FK CASCADE handles server_members, channel_members,
+    //    friendships, blocks, prekeys, key_backups, sender_key_distributions, etc.)
     queries::delete_user_account(state.db.write(), user_id).await?;
+
+    // 9. Clean up stored files (avatar, banner)
+    let avatar_key = crate::storage::obfuscated_key(
+        &state.storage_key,
+        &format!("avatar:{}", user_id),
+    );
+    let banner_key = crate::storage::obfuscated_key(
+        &state.storage_key,
+        &format!("banner:{}", user_id),
+    );
+    let _ = state.storage.delete_blob(&avatar_key).await;
+    let _ = state.storage.delete_blob(&banner_key).await;
+
+    // 10. Invalidate caches
+    crate::cache::invalidate(
+        state.redis.clone().as_mut(),
+        &state.memory,
+        &format!("haven:user:{}", user_id),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "deleted": true,

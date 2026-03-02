@@ -114,6 +114,7 @@ impl TestApp {
 
             beta_code_limit: 50,
             beta_code_expiry_days: 7,
+            trust_proxy: false,
         };
 
         std::fs::create_dir_all(&config.storage_dir).ok();
@@ -377,6 +378,49 @@ impl TestApp {
         assert_eq!(status, StatusCode::OK, "Accept friend request failed");
 
         friendship_id
+    }
+
+    /// Make a user an instance admin by directly updating the database.
+    pub async fn make_admin(&self, user_id: Uuid) {
+        let pool: &haven_backend::db::Pool = self.state.db.write();
+        sqlx::query("UPDATE users SET is_instance_admin = true WHERE id = $1")
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .expect("Failed to set user as admin");
+    }
+
+    /// Create a voice channel in a server and return (channel_id).
+    pub async fn create_voice_channel(&self, token: &str, server_id: Uuid, name: &str) -> Uuid {
+        let b64 = &base64::engine::general_purpose::STANDARD;
+        let body = json!({
+            "encrypted_meta": b64.encode(name.as_bytes()),
+            "channel_type": "voice"
+        });
+        let uri = format!("/api/v1/servers/{}/channels", server_id);
+
+        let (status, value) = self
+            .request(Method::POST, &uri, Some(token), Some(body))
+            .await;
+
+        assert_eq!(status, StatusCode::OK, "Create voice channel failed: {}", value);
+
+        Uuid::parse_str(value["id"].as_str().unwrap()).unwrap()
+    }
+
+    /// Create a DM with a target user. Returns the channel_id.
+    pub async fn create_dm(&self, token: &str, target_user_id: Uuid) -> Uuid {
+        let b64 = &base64::engine::general_purpose::STANDARD;
+        let body = json!({
+            "target_user_id": target_user_id,
+            "encrypted_meta": b64.encode(b"dm-meta")
+        });
+        let (status, value) = self
+            .request(Method::POST, "/api/v1/dm", Some(token), Some(body))
+            .await;
+
+        assert_eq!(status, StatusCode::OK, "Create DM failed: {}", value);
+        Uuid::parse_str(value["id"].as_str().unwrap()).unwrap()
     }
 
     /// Send raw bytes as a request body (for attachment upload).
