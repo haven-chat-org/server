@@ -1,5 +1,5 @@
-discordsucks.org {
-    redir https://www.discordsucks.org{uri} permanent
+discordsucks.org, www.discordsucks.org {
+    redir https://app.haven-chat.org{uri} permanent
 }
 
 {$HAVEN_DOMAIN} {
