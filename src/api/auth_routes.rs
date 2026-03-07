@@ -42,7 +42,11 @@ fn parse_device_name(ua: &str) -> String {
 }
 
 /// Extract client IP from headers (X-Forwarded-For or X-Real-IP).
-fn extract_ip_from_headers(headers: &HeaderMap) -> Option<String> {
+/// Only reads proxy headers when trust_proxy is true to prevent IP spoofing.
+fn extract_ip_from_headers(headers: &HeaderMap, trust_proxy: bool) -> Option<String> {
+    if !trust_proxy {
+        return None;
+    }
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -386,7 +390,7 @@ pub async fn register(
     let refresh_hash = auth::hash_refresh_token(&refresh_token);
 
     let device = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(parse_device_name);
-    let ip = extract_ip_from_headers(&headers);
+    let ip = extract_ip_from_headers(&headers, state.config.trust_proxy);
     let expiry = Utc::now() + Duration::days(state.config.refresh_token_expiry_days);
     queries::store_refresh_token_with_metadata(
         state.db.write(), user.id, &refresh_hash, expiry, Some(family_id),
@@ -443,7 +447,7 @@ pub async fn login(
     let refresh_hash = auth::hash_refresh_token(&refresh_token);
 
     let device = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(parse_device_name);
-    let ip = extract_ip_from_headers(&headers);
+    let ip = extract_ip_from_headers(&headers, state.config.trust_proxy);
     let expiry = Utc::now() + Duration::days(state.config.refresh_token_expiry_days);
     queries::store_refresh_token_with_metadata(
         state.db.write(), user.id, &refresh_hash, expiry, Some(family_id),
