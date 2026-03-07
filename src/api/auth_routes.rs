@@ -778,3 +778,44 @@ pub async fn delete_account(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_ip_ignores_headers_when_trust_proxy_false() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 5.6.7.8".parse().unwrap());
+        headers.insert("x-real-ip", "9.8.7.6".parse().unwrap());
+
+        let result = extract_ip_from_headers(&headers, false);
+        assert_eq!(result, None, "Must not read proxy headers when trust_proxy is false");
+    }
+
+    #[test]
+    fn extract_ip_reads_forwarded_for_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 5.6.7.8".parse().unwrap());
+
+        let result = extract_ip_from_headers(&headers, true);
+        assert_eq!(result, Some("1.2.3.4".to_string()));
+    }
+
+    #[test]
+    fn extract_ip_falls_back_to_real_ip_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "9.8.7.6".parse().unwrap());
+
+        let result = extract_ip_from_headers(&headers, true);
+        assert_eq!(result, Some("9.8.7.6".to_string()));
+    }
+
+    #[test]
+    fn extract_ip_returns_none_when_trusted_but_no_headers() {
+        let headers = HeaderMap::new();
+
+        let result = extract_ip_from_headers(&headers, true);
+        assert_eq!(result, None);
+    }
+}
