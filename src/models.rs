@@ -29,11 +29,14 @@ pub struct User {
     pub username: String,
     pub display_name: Option<String>,
     pub email_hash: Option<String>,
+    #[serde(skip_serializing, default)]
     pub password_hash: String,
     pub identity_key: Vec<u8>,     // X25519 public identity key
     pub signed_prekey: Vec<u8>,    // Signed pre-key (public)
     pub signed_prekey_sig: Vec<u8>, // Signature over the signed pre-key
+    #[serde(skip_serializing, default)]
     pub totp_secret: Option<String>,
+    #[serde(skip_serializing, default)]
     pub pending_totp_secret: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
