@@ -53,6 +53,7 @@ pub struct TestApp {
     state: AppState,
 }
 
+#[allow(dead_code)]
 impl TestApp {
     /// Build a TestApp from the pool provided by `#[sqlx::test]`.
     pub async fn new(pool: Pool) -> Self {

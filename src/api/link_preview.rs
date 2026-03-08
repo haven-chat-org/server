@@ -54,8 +54,7 @@ impl Resolve for SsrfSafeResolver {
                     .collect();
 
             if addrs.is_empty() {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(Box::new(std::io::Error::other(
                     "Could not resolve hostname",
                 )) as Box<dyn std::error::Error + Send + Sync>);
             }

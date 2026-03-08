@@ -62,6 +62,7 @@ async fn ws_send(
 }
 
 /// Helper: receive the next text message with a timeout.
+#[allow(dead_code)]
 async fn ws_recv(
     stream: &mut futures::stream::SplitStream<
         tokio_tungstenite::WebSocketStream<
