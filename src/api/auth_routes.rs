@@ -42,7 +42,11 @@ fn parse_device_name(ua: &str) -> String {
 }
 
 /// Extract client IP from headers (X-Forwarded-For or X-Real-IP).
-fn extract_ip_from_headers(headers: &HeaderMap) -> Option<String> {
+/// Only reads proxy headers when trust_proxy is true to prevent IP spoofing.
+fn extract_ip_from_headers(headers: &HeaderMap, trust_proxy: bool) -> Option<String> {
+    if !trust_proxy {
+        return None;
+    }
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -386,7 +390,7 @@ pub async fn register(
     let refresh_hash = auth::hash_refresh_token(&refresh_token);
 
     let device = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(parse_device_name);
-    let ip = extract_ip_from_headers(&headers);
+    let ip = extract_ip_from_headers(&headers, state.config.trust_proxy);
     let expiry = Utc::now() + Duration::days(state.config.refresh_token_expiry_days);
     queries::store_refresh_token_with_metadata(
         state.db.write(), user.id, &refresh_hash, expiry, Some(family_id),
@@ -443,7 +447,7 @@ pub async fn login(
     let refresh_hash = auth::hash_refresh_token(&refresh_token);
 
     let device = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(parse_device_name);
-    let ip = extract_ip_from_headers(&headers);
+    let ip = extract_ip_from_headers(&headers, state.config.trust_proxy);
     let expiry = Utc::now() + Duration::days(state.config.refresh_token_expiry_days);
     queries::store_refresh_token_with_metadata(
         state.db.write(), user.id, &refresh_hash, expiry, Some(family_id),
@@ -777,4 +781,45 @@ pub async fn delete_account(
     crate::cache::invalidate(state.redis.clone().as_mut(), &state.memory, &format!("haven:user:{}", user_id)).await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_ip_ignores_headers_when_trust_proxy_false() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 5.6.7.8".parse().unwrap());
+        headers.insert("x-real-ip", "9.8.7.6".parse().unwrap());
+
+        let result = extract_ip_from_headers(&headers, false);
+        assert_eq!(result, None, "Must not read proxy headers when trust_proxy is false");
+    }
+
+    #[test]
+    fn extract_ip_reads_forwarded_for_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 5.6.7.8".parse().unwrap());
+
+        let result = extract_ip_from_headers(&headers, true);
+        assert_eq!(result, Some("1.2.3.4".to_string()));
+    }
+
+    #[test]
+    fn extract_ip_falls_back_to_real_ip_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "9.8.7.6".parse().unwrap());
+
+        let result = extract_ip_from_headers(&headers, true);
+        assert_eq!(result, Some("9.8.7.6".to_string()));
+    }
+
+    #[test]
+    fn extract_ip_returns_none_when_trusted_but_no_headers() {
+        let headers = HeaderMap::new();
+
+        let result = extract_ip_from_headers(&headers, true);
+        assert_eq!(result, None);
+    }
 }

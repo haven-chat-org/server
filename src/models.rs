@@ -29,11 +29,14 @@ pub struct User {
     pub username: String,
     pub display_name: Option<String>,
     pub email_hash: Option<String>,
+    #[serde(skip_serializing, default)]
     pub password_hash: String,
     pub identity_key: Vec<u8>,     // X25519 public identity key
     pub signed_prekey: Vec<u8>,    // Signed pre-key (public)
     pub signed_prekey_sig: Vec<u8>, // Signature over the signed pre-key
+    #[serde(skip_serializing, default)]
     pub totp_secret: Option<String>,
+    #[serde(skip_serializing, default)]
     pub pending_totp_secret: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -46,6 +49,25 @@ pub struct User {
     pub encrypted_profile: Option<Vec<u8>>,
     pub is_instance_admin: bool,
     pub is_system: bool,
+}
+
+/// Lightweight user projection excluding key material and auth fields.
+/// Use when handler only needs display info (username, avatar, admin status).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserBasic {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub about_me: Option<String>,
+    pub custom_status: Option<String>,
+    pub custom_status_emoji: Option<String>,
+    pub banner_url: Option<String>,
+    pub dm_privacy: String,
+    pub is_instance_admin: bool,
+    pub is_system: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1736,4 +1758,50 @@ fn validate_username(username: &str) -> Result<(), validator::ValidationError> {
         return Err(validator::ValidationError::new("invalid_username"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_serialization_excludes_sensitive_fields() {
+        let user = User {
+            id: Uuid::nil(),
+            username: "testuser".into(),
+            display_name: None,
+            email_hash: None,
+            password_hash: "argon2hash_secret".into(),
+            identity_key: vec![1, 2, 3],
+            signed_prekey: vec![4, 5, 6],
+            signed_prekey_sig: vec![7, 8, 9],
+            totp_secret: Some("JBSWY3DPEHPK3PXP".into()),
+            pending_totp_secret: Some("pending_secret".into()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            about_me: None,
+            custom_status: None,
+            custom_status_emoji: None,
+            avatar_url: None,
+            banner_url: None,
+            dm_privacy: "everyone".into(),
+            encrypted_profile: None,
+            is_instance_admin: false,
+            is_system: false,
+        };
+
+        let json = serde_json::to_string(&user).unwrap();
+        assert!(!json.contains("password_hash"), "JSON must not contain password_hash");
+        assert!(!json.contains("argon2hash_secret"), "JSON must not contain password hash value");
+        assert!(!json.contains("totp_secret"), "JSON must not contain totp_secret");
+        assert!(!json.contains("pending_totp_secret"), "JSON must not contain pending_totp_secret");
+        assert!(!json.contains("JBSWY3DPEHPK3PXP"), "JSON must not contain TOTP secret value");
+
+        // Verify round-trip: deserializing the serialized JSON succeeds with defaults
+        let deserialized: User = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.password_hash, "", "password_hash should default to empty string");
+        assert_eq!(deserialized.totp_secret, None, "totp_secret should default to None");
+        assert_eq!(deserialized.pending_totp_secret, None, "pending_totp_secret should default to None");
+        assert_eq!(deserialized.username, "testuser");
+    }
 }

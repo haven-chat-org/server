@@ -50,7 +50,7 @@ pub async fn ban_member(
     let _ = queries::remove_server_member(state.db.write(), server_id, target_user_id).await;
 
     // Look up username for response
-    let target = queries::find_user_by_id(state.db.read(), target_user_id)
+    let target = queries::find_user_basic_by_id(state.db.read(), target_user_id)
         .await?
         .ok_or(AppError::NotFound("User not found".into()))?;
 

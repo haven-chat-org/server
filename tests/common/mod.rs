@@ -53,6 +53,7 @@ pub struct TestApp {
     state: AppState,
 }
 
+#[allow(dead_code)]
 impl TestApp {
     /// Build a TestApp from the pool provided by `#[sqlx::test]`.
     pub async fn new(pool: Pool) -> Self {
@@ -145,6 +146,7 @@ impl TestApp {
             ws_rate_limiter: UserRateLimiter::new(1000, 10),
             api_rate_limiter: UserRateLimiter::new(1000, 60),
             sessions: Arc::new(DashMap::new()),
+            ban_cache: haven_backend::cache::BanCache::new(60),
         };
 
         TestApp { state }

@@ -1,12 +1,87 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, LazyLock};
 
 use axum::extract::Query;
 use axum::Json;
+use futures::StreamExt;
 use regex::Regex;
+use reqwest::dns::{Name, Resolve, Resolving};
 
 use crate::errors::AppError;
 use crate::middleware::auth::AuthUser;
 use crate::models::{LinkPreviewQuery, LinkPreviewResponse};
+
+const MAX_PREVIEW_BYTES: usize = 512 * 1024; // 512KB for HTML
+const MAX_OEMBED_BYTES: usize = 64 * 1024; // 64KB for oEmbed JSON
+
+static YOUTUBE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^https?://(www\.)?(youtube\.com|youtu\.be)/").unwrap()
+});
+
+static OG_PROPERTY_CONTENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<meta\s+(?:[^>]*?\s)?property\s*=\s*["']og:([^"']+)["'][^>]*?\scontent\s*=\s*["']([^"']*)["'][^>]*/?\s*>"#,
+    ).unwrap()
+});
+
+static OG_CONTENT_PROPERTY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<meta\s+(?:[^>]*?\s)?content\s*=\s*["']([^"']*)["'][^>]*?\sproperty\s*=\s*["']og:([^"']+)["'][^>]*/?\s*>"#,
+    ).unwrap()
+});
+
+static TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)<title[^>]*>([^<]+)</title>").unwrap()
+});
+
+static DESC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<meta\s+(?:[^>]*?\s)?name\s*=\s*"description"[^>]*?\scontent\s*=\s*"([^"]*)"[^>]*/?\s*>"#,
+    ).unwrap()
+});
+
+/// SSRF-safe DNS resolver that rejects private/reserved IPs at resolution time.
+/// This eliminates the TOCTOU window where DNS could return a safe IP for validation
+/// and then a private IP for the actual connection (DNS rebinding attack).
+struct SsrfSafeResolver;
+
+impl Resolve for SsrfSafeResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> =
+                tokio::net::lookup_host(format!("{}:0", name.as_str()))
+                    .await?
+                    .collect();
+
+            if addrs.is_empty() {
+                return Err(Box::new(std::io::Error::other(
+                    "Could not resolve hostname",
+                )) as Box<dyn std::error::Error + Send + Sync>);
+            }
+
+            for addr in &addrs {
+                if is_private_ip(addr.ip()) {
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Blocked: private/reserved IP",
+                    )) as Box<dyn std::error::Error + Send + Sync>);
+                }
+            }
+
+            Ok(Box::new(addrs.into_iter()) as Box<dyn Iterator<Item = SocketAddr> + Send>)
+        })
+    }
+}
+
+/// Build a reqwest client that uses the SSRF-safe DNS resolver.
+fn build_ssrf_safe_client() -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .dns_resolver(Arc::new(SsrfSafeResolver))
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("HTTP client error: {e}")))
+}
 
 /// Fetch Open Graph metadata from a URL for client-side link previews.
 /// The client calls this before encrypting the message, so the preview
@@ -24,7 +99,7 @@ pub async fn fetch_link_preview(
         return Err(AppError::BadRequest("URL must start with http:// or https://".into()));
     }
 
-    // ── SSRF protection: resolve hostname and block private/reserved IPs ──
+    // ── SSRF protection: block well-known metadata hostnames (defense-in-depth) ──
     let parsed = reqwest::Url::parse(&url)
         .map_err(|_| AppError::BadRequest("Invalid URL".into()))?;
 
@@ -40,38 +115,15 @@ pub async fn fetch_link_preview(
         return Err(AppError::BadRequest("Blocked: internal hostname".into()));
     }
 
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    let addr_str = format!("{host}:{port}");
-
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&addr_str)
-        .await
-        .map_err(|_| AppError::BadRequest("Could not resolve hostname".into()))?
-        .collect();
-
-    if addrs.is_empty() {
-        return Err(AppError::BadRequest("Could not resolve hostname".into()));
-    }
-
-    for addr in &addrs {
-        if is_private_ip(addr.ip()) {
-            return Err(AppError::BadRequest(
-                "Blocked: URL resolves to a private/reserved IP address".into(),
-            ));
-        }
-    }
+    // Build SSRF-safe client (DNS validation happens atomically at connection time)
+    let client = build_ssrf_safe_client()?;
 
     // Try oEmbed for known providers (YouTube, etc.) before scraping
-    if let Some(preview) = try_oembed(&url).await {
+    if let Some(preview) = try_oembed(&url, &client).await {
         return Ok(Json(preview));
     }
 
     // Fetch with timeout and size limit
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("HTTP client error: {e}")))?;
-
     let response = client
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -96,19 +148,26 @@ pub async fn fetch_link_preview(
         }));
     }
 
-    // Read body with size limit (512KB max)
-    let body = response
-        .text()
-        .await
-        .map_err(|_| AppError::BadRequest("Failed to read response body".into()))?;
+    // Streaming body read with size limit (SEC-03)
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::with_capacity(65536); // Start small, grow as needed
+    let mut total = 0usize;
 
-    let html = if body.len() > 512 * 1024 {
-        &body[..512 * 1024]
-    } else {
-        &body
-    };
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|_| AppError::BadRequest("Failed to read response body".into()))?;
+        total += chunk.len();
+        if total > MAX_PREVIEW_BYTES {
+            let excess = total - MAX_PREVIEW_BYTES;
+            body.extend_from_slice(&chunk[..chunk.len() - excess]);
+            break;
+        }
+        body.extend_from_slice(&chunk);
+    }
 
-    let preview = extract_og_metadata(html, &url);
+    let html = String::from_utf8_lossy(&body);
+
+    let preview = extract_og_metadata(&html, &url);
     Ok(Json(preview))
 }
 
@@ -141,17 +200,13 @@ fn is_private_ip(ip: IpAddr) -> bool {
 
 /// Try to fetch preview via oEmbed for known providers.
 /// Returns None if the URL isn't from a supported provider or the request fails.
-async fn try_oembed(url: &str) -> Option<LinkPreviewResponse> {
+/// Uses the shared SSRF-safe client to prevent DNS rebinding on oEmbed endpoints.
+async fn try_oembed(url: &str, client: &reqwest::Client) -> Option<LinkPreviewResponse> {
     let oembed_url = if is_youtube_url(url) {
         format!("https://www.youtube.com/oembed?url={}&format=json", urlencoding::encode(url))
     } else {
         return None;
     };
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
 
     let resp = client
         .get(&oembed_url)
@@ -163,7 +218,19 @@ async fn try_oembed(url: &str) -> Option<LinkPreviewResponse> {
         return None;
     }
 
-    let json: serde_json::Value = resp.json().await.ok()?;
+    // Streaming body read with size limit for oEmbed JSON
+    let mut stream = resp.bytes_stream();
+    let mut body = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.ok()?;
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_OEMBED_BYTES {
+            return None; // Abnormally large oEmbed response
+        }
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
 
     Some(LinkPreviewResponse {
         url: url.to_string(),
@@ -175,8 +242,7 @@ async fn try_oembed(url: &str) -> Option<LinkPreviewResponse> {
 }
 
 fn is_youtube_url(url: &str) -> bool {
-    let re = Regex::new(r"(?i)^https?://(www\.)?(youtube\.com|youtu\.be)/").unwrap();
-    re.is_match(url)
+    YOUTUBE_RE.is_match(url)
 }
 
 /// Extract Open Graph metadata from HTML using regex.
@@ -188,17 +254,7 @@ fn extract_og_metadata(html: &str, url: &str) -> LinkPreviewResponse {
 
     // Match <meta property="og:..." content="..."> (handles both " and ' quotes)
     // Handles both property="og:X" content="Y" and content="Y" property="og:X" orderings
-    let og_re = Regex::new(
-        r#"(?i)<meta\s+(?:[^>]*?\s)?property\s*=\s*["']og:([^"']+)["'][^>]*?\scontent\s*=\s*["']([^"']*)["'][^>]*/?\s*>"#,
-    )
-    .unwrap();
-
-    let og_re_rev = Regex::new(
-        r#"(?i)<meta\s+(?:[^>]*?\s)?content\s*=\s*["']([^"']*)["'][^>]*?\sproperty\s*=\s*["']og:([^"']+)["'][^>]*/?\s*>"#,
-    )
-    .unwrap();
-
-    for cap in og_re.captures_iter(html) {
+    for cap in OG_PROPERTY_CONTENT_RE.captures_iter(html) {
         let key = cap[1].to_lowercase();
         let value = cap[2].to_string();
         match key.as_str() {
@@ -211,7 +267,7 @@ fn extract_og_metadata(html: &str, url: &str) -> LinkPreviewResponse {
     }
 
     // Also check reversed attribute order
-    for cap in og_re_rev.captures_iter(html) {
+    for cap in OG_CONTENT_PROPERTY_RE.captures_iter(html) {
         let value = cap[1].to_string();
         let key = cap[2].to_lowercase();
         match key.as_str() {
@@ -225,19 +281,14 @@ fn extract_og_metadata(html: &str, url: &str) -> LinkPreviewResponse {
 
     // Fallback: <title> tag
     if resp.title.is_none() {
-        let title_re = Regex::new(r"(?i)<title[^>]*>([^<]+)</title>").unwrap();
-        if let Some(cap) = title_re.captures(html) {
+        if let Some(cap) = TITLE_RE.captures(html) {
             resp.title = Some(cap[1].trim().to_string());
         }
     }
 
     // Fallback: <meta name="description" content="...">
     if resp.description.is_none() {
-        let desc_re = Regex::new(
-            r#"(?i)<meta\s+(?:[^>]*?\s)?name\s*=\s*"description"[^>]*?\scontent\s*=\s*"([^"]*)"[^>]*/?\s*>"#,
-        )
-        .unwrap();
-        if let Some(cap) = desc_re.captures(html) {
+        if let Some(cap) = DESC_RE.captures(html) {
             resp.description = Some(cap[1].to_string());
         }
     }

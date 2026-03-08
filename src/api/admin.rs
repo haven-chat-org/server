@@ -72,7 +72,7 @@ pub async fn set_admin(
     }
 
     // Verify target user exists
-    queries::find_user_by_id(state.db.read(), user_id)
+    queries::find_user_basic_by_id(state.db.read(), user_id)
         .await?
         .ok_or(crate::errors::AppError::NotFound("User not found".into()))?;
 
@@ -98,7 +98,7 @@ pub async fn delete_user(
     }
 
     // Verify target user exists
-    queries::find_user_by_id(state.db.read(), user_id)
+    queries::find_user_basic_by_id(state.db.read(), user_id)
         .await?
         .ok_or(crate::errors::AppError::NotFound("User not found".into()))?;
 
@@ -360,7 +360,7 @@ pub async fn instance_ban_user(
     }
 
     // Verify target user exists
-    let target = queries::find_user_by_id(state.db.read(), user_id)
+    let target = queries::find_user_basic_by_id(state.db.read(), user_id)
         .await?
         .ok_or(AppError::NotFound("User not found".into()))?;
 
@@ -388,24 +388,40 @@ pub async fn instance_ban_user(
         }
     }
 
-    // Invalidate refresh tokens in Redis
+    // Update ban cache immediately for instant consistency
+    state.ban_cache.set(user_id, true);
+
+    // Invalidate refresh tokens in Redis (SCAN cursor loop, non-blocking)
     if let Some(ref redis) = state.redis {
         let pattern = format!("refresh_token:{}:*", user_id);
         let mut conn = redis.clone();
-        let keys: Vec<String> = redis::cmd("KEYS")
-            .arg(&pattern)
-            .query_async(&mut conn)
-            .await
-            .unwrap_or_default();
-        for key in keys {
-            let _: Result<(), _> = redis::cmd("DEL")
-                .arg(&key)
+        let mut cursor: u64 = 0;
+        loop {
+            let result: Result<(u64, Vec<String>), _> = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
                 .query_async(&mut conn)
                 .await;
+            match result {
+                Ok((next_cursor, keys)) => {
+                    if !keys.is_empty() {
+                        let _: Result<(), _> =
+                            redis::cmd("DEL").arg(&keys).query_async(&mut conn).await;
+                    }
+                    cursor = next_cursor;
+                    if cursor == 0 {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
         }
     }
 
-    let admin_user = queries::find_user_by_id(state.db.read(), admin_id)
+    let admin_user = queries::find_user_basic_by_id(state.db.read(), admin_id)
         .await?
         .ok_or(AppError::NotFound("Admin user not found".into()))?;
 
@@ -427,6 +443,7 @@ pub async fn instance_revoke_ban(
     Path(user_id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     queries::remove_instance_ban(state.db.write(), user_id).await?;
+    state.ban_cache.invalidate(&user_id);
     Ok(Json(serde_json::json!({ "unbanned": true })))
 }
 
@@ -465,7 +482,7 @@ pub async fn create_blocked_hash(
     )
     .await?;
 
-    let admin_user = queries::find_user_by_id(state.db.read(), admin_id)
+    let admin_user = queries::find_user_basic_by_id(state.db.read(), admin_id)
         .await?
         .ok_or(AppError::NotFound("Admin user not found".into()))?;
 

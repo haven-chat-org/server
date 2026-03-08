@@ -73,7 +73,7 @@ pub async fn join_voice(
         .insert(user_id);
 
     // Look up display name for LiveKit participant metadata
-    let participant_name = match queries::find_user_by_id(state.db.read(), user_id).await {
+    let participant_name = match queries::find_user_basic_by_id(state.db.read(), user_id).await {
         Ok(Some(u)) => u.display_name.unwrap_or(u.username),
         _ => user_id.to_string(),
     };
@@ -158,7 +158,7 @@ pub async fn get_participants(
 
     let mut participants = Vec::new();
     for uid in &member_ids {
-        if let Ok(Some(user)) = queries::find_user_by_id(state.db.read(), *uid).await {
+        if let Ok(Some(user)) = queries::find_user_basic_by_id(state.db.read(), *uid).await {
             participants.push(VoiceParticipantResponse {
                 user_id: *uid,
                 username: user.username,
@@ -305,7 +305,7 @@ async fn broadcast_voice_state(
     joined: bool,
 ) {
     // Look up username for the event
-    let username = match queries::find_user_by_id(state.db.read(), user_id).await {
+    let username = match queries::find_user_basic_by_id(state.db.read(), user_id).await {
         Ok(Some(user)) => user.display_name.unwrap_or(user.username),
         _ => return,
     };

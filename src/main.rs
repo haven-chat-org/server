@@ -132,6 +132,7 @@ async fn main() {
         ws_rate_limiter,
         api_rate_limiter,
         sessions: Arc::new(DashMap::new()),
+        ban_cache: haven_backend::cache::BanCache::new(60),
     };
 
     // Start Redis pub/sub subscriber and store the subscriptions handle
