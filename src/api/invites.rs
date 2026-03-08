@@ -154,7 +154,7 @@ pub async fn join_by_invite(
         .and_then(|id| channels.iter().find(|c| c.id == id))
         .or(channels.first());
     if let Some(target_channel) = sys_channel {
-        let user = queries::find_user_by_id(state.db.read(), user_id).await?.unwrap();
+        let user = queries::find_user_basic_by_id(state.db.read(), user_id).await?.unwrap();
         let username = user.display_name.as_deref().unwrap_or(&user.username);
         let body = serde_json::json!({
             "event": "member_joined",
@@ -226,7 +226,7 @@ pub async fn kick_member(
     }
 
     // Look up username before removing
-    let target_user = queries::find_user_by_id(state.db.read(), target_user_id).await?;
+    let target_user = queries::find_user_basic_by_id(state.db.read(), target_user_id).await?;
     let target_name = target_user
         .as_ref()
         .map(|u| u.display_name.as_deref().unwrap_or(&u.username))

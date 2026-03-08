@@ -75,7 +75,7 @@ impl FromRequestParts<AppState> for AdminUser {
         let user_id = user_id_from_claims(&claims)?;
 
         // Verify user is an instance admin
-        let user = queries::find_user_by_id(state.db.read(), user_id)
+        let user = queries::find_user_basic_by_id(state.db.read(), user_id)
             .await?
             .ok_or(AppError::AuthError("User not found".into()))?;
 

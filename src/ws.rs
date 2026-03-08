@@ -1186,7 +1186,7 @@ async fn handle_pin_message(
             pubsub::publish_channel_event(state.redis.clone().as_mut(), channel_id, &pin_msg).await;
 
             // Insert system message for pin
-            if let Ok(Some(user)) = queries::find_user_by_id(state.db.read(), user_id).await {
+            if let Ok(Some(user)) = queries::find_user_basic_by_id(state.db.read(), user_id).await {
                 let username = user.display_name.as_deref().unwrap_or(&user.username);
                 let body = serde_json::json!({
                     "event": "message_pinned",
@@ -1246,7 +1246,7 @@ async fn handle_unpin_message(
             pubsub::publish_channel_event(state.redis.clone().as_mut(), channel_id, &unpin_msg).await;
 
             // Insert system message for unpin
-            if let Ok(Some(user)) = queries::find_user_by_id(state.db.read(), user_id).await {
+            if let Ok(Some(user)) = queries::find_user_basic_by_id(state.db.read(), user_id).await {
                 let username = user.display_name.as_deref().unwrap_or(&user.username);
                 let body = serde_json::json!({
                     "event": "message_unpinned",
@@ -1357,7 +1357,7 @@ async fn handle_call_invite(
     }
 
     // Look up caller name
-    let caller_name = match queries::find_user_by_id(state.db.read(), user_id).await {
+    let caller_name = match queries::find_user_basic_by_id(state.db.read(), user_id).await {
         Ok(Some(u)) => u.display_name.unwrap_or(u.username),
         _ => return,
     };
@@ -1458,7 +1458,7 @@ async fn handle_call_end(
 
     // Insert a system message with call duration (only if the call was connected)
     if let Some(secs) = duration_secs {
-        let caller_name = match queries::find_user_by_id(state.db.read(), user_id).await {
+        let caller_name = match queries::find_user_basic_by_id(state.db.read(), user_id).await {
             Ok(Some(u)) => u.display_name.unwrap_or(u.username),
             _ => "Someone".to_string(),
         };

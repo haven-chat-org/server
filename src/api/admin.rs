@@ -72,7 +72,7 @@ pub async fn set_admin(
     }
 
     // Verify target user exists
-    queries::find_user_by_id(state.db.read(), user_id)
+    queries::find_user_basic_by_id(state.db.read(), user_id)
         .await?
         .ok_or(crate::errors::AppError::NotFound("User not found".into()))?;
 
@@ -98,7 +98,7 @@ pub async fn delete_user(
     }
 
     // Verify target user exists
-    queries::find_user_by_id(state.db.read(), user_id)
+    queries::find_user_basic_by_id(state.db.read(), user_id)
         .await?
         .ok_or(crate::errors::AppError::NotFound("User not found".into()))?;
 
@@ -360,7 +360,7 @@ pub async fn instance_ban_user(
     }
 
     // Verify target user exists
-    let target = queries::find_user_by_id(state.db.read(), user_id)
+    let target = queries::find_user_basic_by_id(state.db.read(), user_id)
         .await?
         .ok_or(AppError::NotFound("User not found".into()))?;
 
@@ -421,7 +421,7 @@ pub async fn instance_ban_user(
         }
     }
 
-    let admin_user = queries::find_user_by_id(state.db.read(), admin_id)
+    let admin_user = queries::find_user_basic_by_id(state.db.read(), admin_id)
         .await?
         .ok_or(AppError::NotFound("Admin user not found".into()))?;
 
@@ -482,7 +482,7 @@ pub async fn create_blocked_hash(
     )
     .await?;
 
-    let admin_user = queries::find_user_by_id(state.db.read(), admin_id)
+    let admin_user = queries::find_user_basic_by_id(state.db.read(), admin_id)
         .await?
         .ok_or(AppError::NotFound("Admin user not found".into()))?;
 
