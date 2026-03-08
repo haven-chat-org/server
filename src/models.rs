@@ -51,6 +51,25 @@ pub struct User {
     pub is_system: bool,
 }
 
+/// Lightweight user projection excluding key material and auth fields.
+/// Use when handler only needs display info (username, avatar, admin status).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserBasic {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub about_me: Option<String>,
+    pub custom_status: Option<String>,
+    pub custom_status_emoji: Option<String>,
+    pub banner_url: Option<String>,
+    pub dm_privacy: String,
+    pub is_instance_admin: bool,
+    pub is_system: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserPublic {
     pub id: Uuid,

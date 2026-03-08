@@ -63,6 +63,21 @@ pub async fn find_user_by_id(pool: &Pool, id: Uuid) -> AppResult<Option<User>> {
     Ok(user)
 }
 
+/// Lightweight user lookup excluding key material and auth fields.
+/// Use when handler only needs display info (username, avatar, admin status).
+pub async fn find_user_basic_by_id(pool: &Pool, id: Uuid) -> AppResult<Option<UserBasic>> {
+    let user = sqlx::query_as::<_, UserBasic>(
+        "SELECT id, username, display_name, avatar_url, about_me, \
+         custom_status, custom_status_emoji, banner_url, dm_privacy, \
+         is_instance_admin, is_system, created_at, updated_at \
+         FROM users WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(user)
+}
+
 /// Cached variant — checks cache first, falls back to DB, caches for 5 min.
 pub async fn find_user_by_id_cached(
     pool: &Pool,
