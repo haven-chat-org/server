@@ -145,6 +145,7 @@ impl TestApp {
             ws_rate_limiter: UserRateLimiter::new(1000, 10),
             api_rate_limiter: UserRateLimiter::new(1000, 60),
             sessions: Arc::new(DashMap::new()),
+            ban_cache: haven_backend::cache::BanCache::new(60),
         };
 
         TestApp { state }

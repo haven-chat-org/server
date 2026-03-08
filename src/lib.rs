@@ -59,6 +59,8 @@ pub struct AppState {
     pub api_rate_limiter: UserRateLimiter,
     /// WebSocket sessions for resume support
     pub sessions: ws::SessionMap,
+    /// In-memory cache for instance ban status (avoids DB query per request)
+    pub ban_cache: cache::BanCache,
 }
 
 // ─── Router ────────────────────────────────────────────
