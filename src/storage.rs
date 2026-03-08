@@ -1,5 +1,5 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use aes_gcm::aead::{Aead, OsRng};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, KeyInit, Nonce};
@@ -320,37 +320,6 @@ impl Storage {
     }
 }
 
-// ─── Legacy free functions (kept for backward compatibility) ──
-
-/// Encrypt data with AES-256-GCM and write to disk.
-/// File format: [12-byte nonce || ciphertext+tag]
-pub async fn store_blob(
-    storage_dir: &Path,
-    storage_key: &str,
-    data: &[u8],
-    server_key: &[u8; 32],
-) -> io::Result<()> {
-    let encrypted = encrypt_blob(data, server_key)?;
-    let path = storage_dir.join(storage_key);
-
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    tokio::fs::write(&path, &encrypted).await
-}
-
-/// Read from disk and decrypt with AES-256-GCM.
-pub async fn load_blob(
-    storage_dir: &Path,
-    storage_key: &str,
-    server_key: &[u8; 32],
-) -> io::Result<Vec<u8>> {
-    let path = storage_dir.join(storage_key);
-    let data = tokio::fs::read(&path).await?;
-    decrypt_blob(&data, server_key)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,26 +429,6 @@ mod tests {
             encryption_key: key,
         };
         assert_eq!(storage.encryption_key(), &key);
-    }
-
-    // ─── store_blob / load_blob (legacy free functions) ──
-
-    #[tokio::test]
-    async fn store_and_load_blob_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = [0u8; 32];
-        let data = b"test file contents for roundtrip";
-
-        store_blob(dir.path(), "test/file.enc", data, &key).await.unwrap();
-        let loaded = load_blob(dir.path(), "test/file.enc", &key).await.unwrap();
-        assert_eq!(loaded, data);
-    }
-
-    #[tokio::test]
-    async fn load_blob_nonexistent_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = [0u8; 32];
-        assert!(load_blob(dir.path(), "missing.enc", &key).await.is_err());
     }
 
     // ─── Storage::store_blob / load_blob (Local backend) ─
