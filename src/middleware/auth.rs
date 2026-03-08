@@ -32,8 +32,16 @@ impl FromRequestParts<AppState> for AuthUser {
         let claims = validate_access_token(token, &state.config)?;
         let user_id = user_id_from_claims(&claims)?;
 
-        // Check instance ban
-        if queries::is_instance_banned(state.db.read(), user_id).await? {
+        // Check instance ban (cache-first to avoid DB query on every request)
+        let is_banned = if let Some(cached) = state.ban_cache.get(&user_id) {
+            cached
+        } else {
+            let banned = queries::is_instance_banned(state.db.read(), user_id).await?;
+            state.ban_cache.set(user_id, banned);
+            banned
+        };
+
+        if is_banned {
             return Err(AppError::Forbidden(
                 "Your account has been banned from this platform".into(),
             ));
