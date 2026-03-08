@@ -1745,7 +1745,6 @@ dependencies = [
  "hex",
  "hmac",
  "jsonwebtoken",
- "lazy_static",
  "lettre",
  "livekit-api",
  "mime_guess",
