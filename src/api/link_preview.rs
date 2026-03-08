@@ -1,5 +1,5 @@
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::extract::Query;
 use axum::Json;
@@ -13,6 +13,32 @@ use crate::models::{LinkPreviewQuery, LinkPreviewResponse};
 
 const MAX_PREVIEW_BYTES: usize = 512 * 1024; // 512KB for HTML
 const MAX_OEMBED_BYTES: usize = 64 * 1024; // 64KB for oEmbed JSON
+
+static YOUTUBE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^https?://(www\.)?(youtube\.com|youtu\.be)/").unwrap()
+});
+
+static OG_PROPERTY_CONTENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<meta\s+(?:[^>]*?\s)?property\s*=\s*["']og:([^"']+)["'][^>]*?\scontent\s*=\s*["']([^"']*)["'][^>]*/?\s*>"#,
+    ).unwrap()
+});
+
+static OG_CONTENT_PROPERTY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<meta\s+(?:[^>]*?\s)?content\s*=\s*["']([^"']*)["'][^>]*?\sproperty\s*=\s*["']og:([^"']+)["'][^>]*/?\s*>"#,
+    ).unwrap()
+});
+
+static TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)<title[^>]*>([^<]+)</title>").unwrap()
+});
+
+static DESC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<meta\s+(?:[^>]*?\s)?name\s*=\s*"description"[^>]*?\scontent\s*=\s*"([^"]*)"[^>]*/?\s*>"#,
+    ).unwrap()
+});
 
 /// SSRF-safe DNS resolver that rejects private/reserved IPs at resolution time.
 /// This eliminates the TOCTOU window where DNS could return a safe IP for validation
@@ -217,8 +243,7 @@ async fn try_oembed(url: &str, client: &reqwest::Client) -> Option<LinkPreviewRe
 }
 
 fn is_youtube_url(url: &str) -> bool {
-    let re = Regex::new(r"(?i)^https?://(www\.)?(youtube\.com|youtu\.be)/").unwrap();
-    re.is_match(url)
+    YOUTUBE_RE.is_match(url)
 }
 
 /// Extract Open Graph metadata from HTML using regex.
@@ -230,17 +255,7 @@ fn extract_og_metadata(html: &str, url: &str) -> LinkPreviewResponse {
 
     // Match <meta property="og:..." content="..."> (handles both " and ' quotes)
     // Handles both property="og:X" content="Y" and content="Y" property="og:X" orderings
-    let og_re = Regex::new(
-        r#"(?i)<meta\s+(?:[^>]*?\s)?property\s*=\s*["']og:([^"']+)["'][^>]*?\scontent\s*=\s*["']([^"']*)["'][^>]*/?\s*>"#,
-    )
-    .unwrap();
-
-    let og_re_rev = Regex::new(
-        r#"(?i)<meta\s+(?:[^>]*?\s)?content\s*=\s*["']([^"']*)["'][^>]*?\sproperty\s*=\s*["']og:([^"']+)["'][^>]*/?\s*>"#,
-    )
-    .unwrap();
-
-    for cap in og_re.captures_iter(html) {
+    for cap in OG_PROPERTY_CONTENT_RE.captures_iter(html) {
         let key = cap[1].to_lowercase();
         let value = cap[2].to_string();
         match key.as_str() {
@@ -253,7 +268,7 @@ fn extract_og_metadata(html: &str, url: &str) -> LinkPreviewResponse {
     }
 
     // Also check reversed attribute order
-    for cap in og_re_rev.captures_iter(html) {
+    for cap in OG_CONTENT_PROPERTY_RE.captures_iter(html) {
         let value = cap[1].to_string();
         let key = cap[2].to_lowercase();
         match key.as_str() {
@@ -267,19 +282,14 @@ fn extract_og_metadata(html: &str, url: &str) -> LinkPreviewResponse {
 
     // Fallback: <title> tag
     if resp.title.is_none() {
-        let title_re = Regex::new(r"(?i)<title[^>]*>([^<]+)</title>").unwrap();
-        if let Some(cap) = title_re.captures(html) {
+        if let Some(cap) = TITLE_RE.captures(html) {
             resp.title = Some(cap[1].trim().to_string());
         }
     }
 
     // Fallback: <meta name="description" content="...">
     if resp.description.is_none() {
-        let desc_re = Regex::new(
-            r#"(?i)<meta\s+(?:[^>]*?\s)?name\s*=\s*"description"[^>]*?\scontent\s*=\s*"([^"]*)"[^>]*/?\s*>"#,
-        )
-        .unwrap();
-        if let Some(cap) = desc_re.captures(html) {
+        if let Some(cap) = DESC_RE.captures(html) {
             resp.description = Some(cap[1].to_string());
         }
     }
