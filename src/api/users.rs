@@ -236,7 +236,7 @@ pub async fn get_avatar(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=3600".to_string()),
+                (header::CACHE_CONTROL, "public, no-cache".to_string()),
             ],
             data,
         )
@@ -254,7 +254,7 @@ pub async fn get_avatar(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=3600".to_string()),
+                (header::CACHE_CONTROL, "public, no-cache".to_string()),
             ],
             data,
         )
@@ -340,7 +340,7 @@ pub async fn get_banner(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=3600".to_string()),
+                (header::CACHE_CONTROL, "public, no-cache".to_string()),
             ],
             data,
         )
@@ -357,7 +357,7 @@ pub async fn get_banner(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=3600".to_string()),
+                (header::CACHE_CONTROL, "public, no-cache".to_string()),
             ],
             data,
         )
